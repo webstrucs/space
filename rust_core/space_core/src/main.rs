@@ -5,17 +5,24 @@
 // mod utils;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::Duration; // Usado pelo tokio::time::sleep
+use tokio::time::{timeout, Duration}; // Para o idle timeout
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::env;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration as StdDuration; // Para o TCP Keep-Alive, para evitar conflito com tokio::time::Duration
 
 // NOVAS IMPORTAÇÕES PARA GOVERNOR
 use governor::{Quota, RateLimiter};
 use governor::state::InMemoryState; // Usaremos InMemoryState para um limite global simples
 use std::num::NonZeroU32; // Para definir taxas que não sejam zero
+
+// NOVAS IMPORTAÇÕES PARA SOCKET2 (CORRIGIDAS)
+use socket2::{SockRef, TcpKeepalive};
+use std::os::unix::io::AsRawFd; // Para sistemas Unix-like (Linux/macOS)
+// Para Windows, você usaria: use std::os::windows::io::AsRawSocket;
+// A trait `FromRawFd` ou a função `Socket::from_raw_fd` não são necessárias com SockRef::from.
 
 // Alias para a nossa estrutura de gerenciamento de conexões.
 type Connections = Arc<Mutex<HashMap<usize, TcpStream>>>;
@@ -38,36 +45,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- CONFIGURAÇÃO DO RATE LIMITER (TAREFA 7.2) ---
     // Define o limite de taxa para novas conexões:
     // 5 conexões por segundo, com uma capacidade de burst (estouro) de 5.
-    // Isso permite que o servidor aceite até 5 conexões de forma instantânea
-    // e, após isso, limite a aceitação a 5 novas conexões por segundo.
     let quota = Quota::per_second(NonZeroU32::new(5).expect("quota rate must be non-zero"))
-                      .allow_burst(NonZeroU32::new(5).expect("burst size must be non-zero"));
+                          .allow_burst(NonZeroU32::new(5).expect("burst size must be non-zero"));
 
-    // Cria o rate limiter global.
-    // `RateLimiter::direct(quota)` cria um limiter sem chaves (global).
-    // `InMemoryState` é o estado padrão e simples para este tipo de limiter.
     let global_rate_limiter = Arc::new(RateLimiter::direct(quota));
     // --- FIM DA CONFIGURAÇÃO DO RATE LIMITER ---
 
-
-    // O runtime Tokio gerencia a multiplexação de I/O (epoll/kqueue/IOCP) automaticamente
-    // ao usar operações assíncronas como `listener.accept().await` e `tokio::io::AsyncReadExt`/`AsyncWriteExt`.
-    // Isso permite que o servidor lide com milhares de conexões simultâneas de forma eficiente.
     loop {
         // Aceita uma nova conexão.
-        let (mut socket, peer_addr) = listener.accept().await?;
+        let (socket, peer_addr) = listener.accept().await?;
 
         // Clona o rate limiter para ser usado na verificação.
         let rate_limiter_for_check = Arc::clone(&global_rate_limiter);
 
-        // --- INÍCIO DA INTEGRAÇÃO DO RATE LIMITER (TAREFA 7.3) ---
-        // Verifica se a nova conexão excede o limite.
-        // `check()` tenta consumir uma permissão. Se retornar Err, o limite foi atingido.
+        // --- INTEGRAÇÃO DO RATE LIMITER (TAREFA 7.3) ---
         if rate_limiter_for_check.check().is_err() {
             println!("Rate limit excedido para nova conexão de: {}. Conexão recusada.", peer_addr);
-            // Ao simplesmente retornar ou usar `continue`, o `socket` sai do escopo
-            // e é automaticamente fechado pelo Tokio, recusando a conexão.
-            continue; // Pula para a próxima iteração do loop para aceitar outra conexão.
+            continue; // Pula para a próxima iteração do loop.
         }
         // --- FIM DA INTEGRAÇÃO DO RATE LIMITER ---
 
@@ -75,47 +69,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("Nova conexão [ID: {}] de: {}", connection_id, peer_addr);
 
-        // Clona a referência Arc para o gerenciador de conexões ativas para ser movida para a nova tarefa.
-        let connections_clone_for_task = Arc::clone(&active_connections);
+        // --- INÍCIO DA CONFIGURAÇÃO DO TCP KEEP-ALIVE (TAREFA 8.2 - CORRIGIDO NOVAMENTE) ---
+        // A maneira correta de obter um SockRef de um TcpStream do Tokio
+        // para aplicar opções de socket é via `SockRef::from(TcpStream)`.
+        let sock_ref = SockRef::from(&socket);
 
-        // NOTA: Para a Tarefa #006, simplificamos o gerenciamento
-        // do HashMap. O `TcpStream` é MOVIDO para a tarefa `tokio::spawn`, o que significa
-        // que o `active_connections` HashMap não mantém uma referência direta ao `TcpStream` vivo aqui.
-        // A precisão do HashMap será abordada em uma futura refatoração do módulo `network`.
+        // Configura os parâmetros do TCP Keep-Alive
+        let keepalive_config = TcpKeepalive::new()
+            .with_time(StdDuration::from_secs(60))    // Tempo de inatividade antes de começar a enviar probes
+            .with_interval(StdDuration::from_secs(10)) // Intervalo entre probes (sem Some())
+            .with_retries(3); // Número de probes antes de considerar a conexão morta (sem Some())
+
+        if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive_config) {
+            eprintln!("[ID: {}] Erro ao configurar TCP Keep-Alive para {}: {}", connection_id, peer_addr, e);
+        } else {
+            println!("[ID: {}] TCP Keep-Alive configurado (idle=60s, int=10s, probes=3) para {}", connection_id, peer_addr);
+        }
+        // --- FIM DA CONFIGURAÇÃO DO TCP KEEP-ALIVE ---
+
+        let connections_clone_for_task = Arc::clone(&active_connections);
         println!("Conexões ativas (temporário, antes de mover para a tarefa): {}", connections_clone_for_task.lock().expect("Failed to lock connections mutex").len());
 
         // A tarefa assíncrona para lidar com a conexão (echo server).
         tokio::spawn(async move {
-            // Buffer para ler os dados da conexão.
+            // É necessário que `socket` seja mutável dentro da closure `async move`.
+            // Por isso, fazemos `let mut socket = socket;` para que a mutabilidade seja local à task.
+            let mut socket = socket;
             let mut buf = vec![0u8; 4096];
 
-            println!("[ID: {}] Iniciando loop de leitura/escrita (echo server)...", connection_id);
+            println!("[ID: {}] Iniciando loop de leitura/escrita (echo server) com idle timeout...", connection_id);
 
             loop {
-                // Tenta ler dados do socket.
-                let bytes_read = match socket.read(&mut buf).await {
-                    Ok(0) => { // Conexão fechada pelo cliente.
-                        println!("[ID: {}] Conexão fechada por {}", connection_id, peer_addr);
-                        break; // Sai do loop para terminar a tarefa.
+                // --- INTEGRAÇÃO DO IDLE TIMEOUT (TAREFA 8.1) ---
+                let read_op = socket.read(&mut buf);
+                let read_result = timeout(Duration::from_secs(30), read_op).await;
+
+                let bytes_read = match read_result {
+                    Ok(Ok(n)) => {
+                        if n == 0 {
+                            println!("[ID: {}] Conexão fechada por {}", connection_id, peer_addr);
+                            break;
+                        }
+                        n
                     },
-                    Ok(n) => n, // Bytes lidos com sucesso.
-                    Err(e) => { // Erro na leitura.
+                    Ok(Err(e)) => {
                         eprintln!("[ID: {}] Erro ao ler do socket {}: {}", connection_id, peer_addr, e);
-                        break; // Sai do loop em caso de erro.
+                        break;
+                    },
+                    Err(_) => { // O timeout de inatividade foi atingido.
+                        println!("[ID: {}] Timeout de inatividade de 30 segundos atingido para {}. Encerrando conexão.", connection_id, peer_addr);
+                        break;
                     }
                 };
 
                 // Escreve os bytes lidos de volta no mesmo socket (comportamento de echo).
                 if let Err(e) = socket.write_all(&buf[..bytes_read]).await {
                     eprintln!("[ID: {}] Erro ao escrever no socket {}: {}", connection_id, peer_addr, e);
-                    break; // Sai do loop em caso de erro na escrita.
+                    break;
                 }
 
                 println!("[ID: {}] Ecoado {} bytes para {}", connection_id, bytes_read, peer_addr);
             }
 
             // Lógica de remoção simulada do HashMap.
-            // Esta lógica ainda precisa ser aprimorada para o gerenciamento preciso do ciclo de vida.
             let mut connections_guard = connections_clone_for_task.lock().expect("Failed to lock connections mutex for removal");
             if connections_guard.remove(&connection_id).is_some() {
                 println!("[ID: {}] Conexão de {} removida do gerenciador (simulado).", connection_id, peer_addr);
