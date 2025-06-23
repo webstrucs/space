@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+governor = { version = "0.10.0", features = ["std"] }
 tokio = { version = "1", features = ["full"] } # Adicione esta linha

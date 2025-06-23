@@ -1,0 +1,10 @@
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/libspinning_top-61ecd20ef0a716ee.rmeta: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/relax.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/rw_spinlock.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/spinlock.rs
+
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/libspinning_top-61ecd20ef0a716ee.rlib: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/relax.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/rw_spinlock.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/spinlock.rs
+
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/spinning_top-61ecd20ef0a716ee.d: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/relax.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/rw_spinlock.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/spinlock.rs
+
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/lib.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/relax.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/rw_spinlock.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spinning_top-0.3.0/src/spinlock.rs:
