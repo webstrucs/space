@@ -461,6 +461,7 @@ name = "space_core"
 version = "0.1.0"
 dependencies = [
  "governor",
+ "socket2",
  "tokio",
 ]
 
