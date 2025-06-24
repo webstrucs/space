@@ -1,0 +1,1 @@
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/release/space_core: /home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/src/lib.rs /home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/src/main.rs

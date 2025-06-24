@@ -4,6 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-governor = { version = "0.10.0", features = ["std"] }
-socket2 = "0.5.10"
-tokio = { version = "1", features = ["full"] } # Adicione esta linha
+tokio = { version = "1", features = ["full", "rt-multi-thread", "signal"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+lazy_static = "1.4.0"
+governor = { version = "0.10.0", features = ["std"] } # Continua com "std"
+socket2 = "0.5"
+bytes = "1.0"
+libc = "0.2"
+pprof = { version = "0.13", features = ["flamegraph", "prost-codec"] }
+
+[profile.release]
+debug = true
+
+[features]
+default = []
+pprof = []

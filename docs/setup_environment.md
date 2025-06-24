@@ -29,3 +29,21 @@ Se você ainda não possui um par de chaves SSH no seu computador local:
 
 ```bash
 ssh-keygen -t rsa -b 4096 -C "seu_email@example.com"
+
+---
+
+**Próximos passos para você:**
+
+1.  **Crie o arquivo:** No seu repositório local, crie o diretório `docs/` se ele ainda não existir e salve o conteúdo acima como `docs/setup_environment.md`.
+2.  **Adicione e comite:**
+    ```bash
+    git add docs/setup_environment.md
+    git commit -m "docs(environment): Document initial VPS setup and dependencies for #1"
+    ```
+3.  **Envie para o remoto:**
+    ```bash
+    git push origin feature/issue-001-env-setup
+    ```
+4.  **Crie o Pull Request:** Vá ao GitHub e crie um Pull Request da `feature/issue-001-env-setup` para a `dev`.
+
+Quando o PR estiver pronto ou se tiver qualquer dúvida durante o processo, me avise!

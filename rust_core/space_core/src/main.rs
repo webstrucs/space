@@ -1,147 +1,135 @@
-// Declaração dos módulos. Continuam comentados até que sejam preenchidos.
-// mod network;
-// mod protocols;
-// mod ipc;
-// mod utils;
+use std::{collections::HashMap, sync::Arc, net::SocketAddr, time::Duration};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{Mutex, Semaphore},
+    time::sleep,
+};
+use tracing::{info, warn, error};
+use lazy_static::lazy_static;
+use governor::{
+    Quota,
+    RateLimiter,
+    state::{InMemoryState, NotKeyed},
+    clock::{DefaultClock, Clock},
+    Jitter, // Manter importado por enquanto, mesmo que não seja usado diretamente
+};
+use std::num::NonZeroU32;
 
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration}; // Para o idle timeout
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::env;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration as StdDuration; // Para o TCP Keep-Alive, para evitar conflito com tokio::time::Duration
+// --- Início das adições para Profiling com pprof ---
+// #[cfg(feature = "pprof")]
+// use pprof::protos::Message; // Descomentado pois não é usado explicitamente
+// --- Fim das adições para Profiling com pprof ---
 
-// IMPORTAÇÕES PARA GOVERNOR
-use governor::{Quota, RateLimiter};
-use governor::state::InMemoryState; // Usaremos InMemoryState para um limite global simples
-use std::num::NonZeroU32; // Para definir taxas que não sejam zero
+lazy_static! {
+    static ref CONNECTIONS: Mutex<HashMap<u32, SocketAddr>> = Mutex::new(HashMap::new());
+    static ref NEXT_ID: Mutex<u32> = Mutex::new(1);
+    static ref RATE_LIMITER: RateLimiter<NotKeyed, InMemoryState, DefaultClock> = {
+        RateLimiter::direct(Quota::per_second(NonZeroU32::new(100_000).unwrap()))
+    };
+}
 
-// IMPORTAÇÕES PARA SOCKET2
-use socket2::{SockRef, TcpKeepalive};
-
-// Alias para a nossa estrutura de gerenciamento de conexões.
-type Connections = Arc<Mutex<HashMap<usize, TcpStream>>>;
-
-// Contador atômico para gerar IDs únicos para cada conexão.
-static CONNECTION_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+// Constante definida corretamente
+const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{}", port);
+    tracing_subscriber::fmt::init();
 
-    let listener = TcpListener::bind(&addr).await?;
+    info!("Iniciando servidor Space Core na porta 8080...");
+    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    info!("Servidor escutando em 127.0.0.1:8080");
 
-    println!("Space Core Server: Escutando em {}", addr);
-    println!("Aguardando conexões...");
+    // Correção: Usando o nome correto da constante
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
 
-    let active_connections: Connections = Arc::new(Mutex::new(HashMap::new()));
+    #[cfg(feature = "pprof")]
+    let profiler_guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(1000)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso", "tokio"])
+        .build()
+        .unwrap();
 
-    // --- CONFIGURAÇÃO DO RATE LIMITER (AJUSTADO PARA 100.000 CPS) ---
-    // Define o limite de taxa para novas conexões:
-    // 100.000 conexões por segundo, com uma capacidade de burst (estouro) de 100.000.
-    // Isso permite ao servidor aceitar um alto volume de novas conexões.
-    let quota = Quota::per_second(NonZeroU32::new(100_000).expect("quota rate must be non-zero"))
-                          .allow_burst(NonZeroU32::new(100_000).expect("burst size must be non-zero"));
+    let server_handle = tokio::spawn(async move {
+        loop {
+            let permit = semaphore.clone().acquire_owned().await
+                .expect("Falha ao adquirir permissão do semáforo.");
 
-    let global_rate_limiter = Arc::new(RateLimiter::direct(quota));
-    // --- FIM DA CONFIGURAÇÃO DO RATE LIMITER ---
+            match listener.accept().await {
+                Ok((socket, addr)) => {
+                    let mut connections = CONNECTIONS.lock().await;
+                    let id = *NEXT_ID.lock().await;
+                    *NEXT_ID.lock().await += 1;
+                    connections.insert(id, addr);
+                    info!("[ID: {}] Nova conexão de: {}", id, addr);
 
-    loop {
-        // Aceita uma nova conexão.
-        let (socket, peer_addr) = listener.accept().await?;
-
-        // Clona o rate limiter para ser usado na verificação.
-        let rate_limiter_for_check = Arc::clone(&global_rate_limiter);
-
-        // --- INTEGRAÇÃO DO RATE LIMITER ---
-        if rate_limiter_for_check.check().is_err() {
-            println!("Rate limit excedido para nova conexão de: {}. Conexão recusada.", peer_addr);
-            continue; // Pula para a próxima iteração do loop.
+                    tokio::spawn(async move {
+                        handle_client(socket, addr, id).await;
+                        drop(permit);
+                        let mut connections = CONNECTIONS.lock().await;
+                        connections.remove(&id);
+                    });
+                }
+                Err(e) => error!("Erro ao aceitar conexão: {}", e),
+            }
         }
-        // --- FIM DA INTEGRAÇÃO DO RATE LIMITER ---
+    });
 
-        let connection_id = CONNECTION_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Sinal de interrupção recebido (Ctrl+C). Encerrando servidor...");
+        },
+        _ = server_handle => {
+            warn!("Servidor encerrou inesperadamente.");
+        }
+    }
 
-        println!("Nova conexão [ID: {}] de: {}", connection_id, peer_addr);
-
-        // --- CONFIGURAÇÃO DO TCP KEEP-ALIVE ---
-        // A maneira correta de obter um SockRef de um TcpStream do Tokio
-        // para aplicar opções de socket é via `SockRef::from(TcpStream)`.
-        let sock_ref = SockRef::from(&socket);
-
-        // Configura os parâmetros do TCP Keep-Alive
-        let keepalive_config = TcpKeepalive::new()
-            .with_time(StdDuration::from_secs(60))    // Tempo de inatividade antes de enviar o primeiro probe
-            .with_interval(StdDuration::from_secs(10)) // Intervalo entre probes
-            .with_retries(3); // Número de probes antes de considerar a conexão morta
-
-        if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive_config) {
-            eprintln!("[ID: {}] Erro ao configurar TCP Keep-Alive para {}: {}", connection_id, peer_addr, e);
+    #[cfg(feature = "pprof")]
+    {
+        info!("Gerando Flame Graph...");
+        if let Ok(report) = profiler_guard.report().build() {
+            let mut file = std::fs::File::create("flamegraph.svg")
+                .expect("Não foi possível criar flamegraph.svg");
+            report.flamegraph(&mut file)
+                .expect("Não foi possível escrever os dados do flamegraph");
+            info!("Flame Graph gerado em flamegraph.svg");
         } else {
-            println!("[ID: {}] TCP Keep-Alive configurado (idle=60s, int=10s, probes=3) para {}", connection_id, peer_addr);
+            warn!("Não foi possível gerar o Flame Graph.");
         }
-        // --- FIM DA CONFIGURAÇÃO DO TCP KEEP-ALIVE ---
+    }
 
-        let connections_clone_for_task = Arc::clone(&active_connections);
-        println!("Conexões ativas (temporário, antes de mover para a tarefa): {}", connections_clone_for_task.lock().expect("Failed to lock connections mutex").len());
+    Ok(())
+}
 
-        // A tarefa assíncrona para lidar com a conexão (echo server).
-        tokio::spawn(async move {
-            let mut socket = socket; // Torna o socket mutável dentro da task.
+async fn handle_client(mut stream: TcpStream, addr: SocketAddr, id: u32) {
+    let mut buffer = vec![0; 1024];
+    loop {
+        loop {
+            match RATE_LIMITER.check() {
+                Ok(_) => break,
+                Err(not_ready_until) => {
+                    let wait_time = not_ready_until.wait_time_from(DefaultClock::default().now());
+                    sleep(wait_time).await;
+                }
+            }
+        }
 
-            // --- ANÁLISE DE BUFFER OVERFLOW ---
-            // Buffer para ler os dados da conexão.
-            // Em Rust, `vec!` garante que o buffer tem um tamanho fixo de 4096 bytes.
-            // A função `socket.read()` nunca escreverá mais bytes do que a capacidade do buffer,
-            // prevenindo buffer overflows. Se a entrada exceder 4096 bytes, será lida em pedaços.
-            let mut buf = vec![0u8; 4096];
-            // --- FIM DA ANÁLISE DE BUFFER OVERFLOW ---
-
-            println!("[ID: {}] Iniciando loop de leitura/escrita (echo server) com idle timeout...", connection_id);
-
-            loop {
-                // --- INTEGRAÇÃO DO IDLE TIMEOUT ---
-                let read_op = socket.read(&mut buf);
-                let read_result = timeout(Duration::from_secs(30), read_op).await;
-
-                let bytes_read = match read_result {
-                    Ok(Ok(n)) => {
-                        if n == 0 {
-                            println!("[ID: {}] Conexão fechada por {}", connection_id, peer_addr);
-                            break;
-                        }
-                        n
-                    },
-                    Ok(Err(e)) => {
-                        eprintln!("[ID: {}] Erro ao ler do socket {}: {}", connection_id, peer_addr, e);
-                        break;
-                    },
-                    Err(_) => { // O timeout de inatividade foi atingido.
-                        println!("[ID: {}] Timeout de inatividade de 30 segundos atingido para {}. Encerrando conexão.", connection_id, peer_addr);
-                        break;
-                    }
-                };
-
-                // Escreve os bytes lidos de volta no mesmo socket (comportamento de echo).
-                if let Err(e) = socket.write_all(&buf[..bytes_read]).await {
-                    eprintln!("[ID: {}] Erro ao escrever no socket {}: {}", connection_id, peer_addr, e);
+        match stream.read(&mut buffer).await {
+            Ok(0) => {
+                info!("[ID: {}] Conexão fechada por {}", id, addr);
+                break;
+            }
+            Ok(n) => {
+                if let Err(e) = stream.write_all(&buffer[0..n]).await {
+                    error!("[ID: {}] Erro ao ecoar dados para {}: {}", id, addr, e);
                     break;
                 }
-
-                println!("[ID: {}] Ecoado {} bytes para {}", connection_id, bytes_read, peer_addr);
+                info!("[ID: {}] Ecoado {} bytes para {}", id, n, addr);
             }
-
-            // Lógica de remoção simulada do HashMap.
-            let mut connections_guard = connections_clone_for_task.lock().expect("Failed to lock connections mutex for removal");
-            if connections_guard.remove(&connection_id).is_some() {
-                println!("[ID: {}] Conexão de {} removida do gerenciador (simulado).", connection_id, peer_addr);
-            } else {
-                eprintln!("[ID: {}] Aviso: Conexão de {} não encontrada no gerenciador (esperado nesta fase).", connection_id, peer_addr);
+            Err(e) => {
+                error!("[ID: {}] Erro de leitura da conexão {}: {}", id, addr, e);
+                break;
             }
-            println!("Conexões ativas restantes (simulado): {}", connections_guard.len());
-        });
+        }
     }
 }
