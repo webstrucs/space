@@ -1,3 +1,5 @@
+# space/rust_core/space_core/Cargo.toml
+
 [package]
 name = "space_core"
 version = "0.1.0"
@@ -8,11 +10,13 @@ tokio = { version = "1", features = ["full", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 lazy_static = "1.4.0"
-governor = { version = "0.10.0", features = ["std"] } # Continua com "std"
-socket2 = "0.5"
+governor = { version = "0.10.0", features = ["std"] }
+socket2 = { version = "0.5", features = ["all"] }
 bytes = "1.0"
 libc = "0.2"
 pprof = { version = "0.13", features = ["flamegraph", "prost-codec"] }
+metrics = "0.21" # Nova dependência
+metrics-exporter-prometheus = "0.12" # Nova dependência
 
 [profile.release]
 debug = true
