@@ -1,0 +1,12 @@
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/libmetrics-76a082babf7e8d8e.rmeta: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/atomics.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/common.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/cow.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/handles.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/key.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/label.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/recorder.rs
+
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/metrics-76a082babf7e8d8e.d: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/atomics.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/common.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/cow.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/handles.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/key.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/label.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/recorder.rs
+
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/lib.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/atomics.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/common.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/cow.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/handles.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/key.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/label.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-0.21.1/src/recorder.rs:

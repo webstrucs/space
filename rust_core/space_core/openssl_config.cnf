@@ -1,0 +1,25 @@
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_ca
+prompt = no
+
+[req_distinguished_name]
+C = BR
+ST = SP
+L = SaoPaulo
+O = Webstrucs_Space
+OU = Development
+CN = localhost
+
+[v3_ca]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = webstrucs
+IP.1 = 127.0.0.1
+IP.2 = 192.168.15.2
+IP.3 = 127.0.1.1
