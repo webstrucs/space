@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, sync::Arc, net::SocketAddr};
 use tokio::{
     net::{TcpListener, TcpStream},
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{Mutex, Semaphore},
+    sync::{Mutex, Semaphore, mpsc},
     time::sleep,
 };
 use tracing::{info, warn, error};
@@ -12,15 +12,11 @@ use governor::{
     RateLimiter,
     state::{InMemoryState, NotKeyed},
     clock::{DefaultClock, Clock},
-    Jitter, // Manter importado por enquanto, mesmo que não seja usado diretamente
 };
 use std::num::NonZeroU32;
+use socket2::{Socket, SockAddr, Protocol, Type, Domain}; // Importações corretas
 
-// --- Início das adições para Profiling com pprof ---
-// #[cfg(feature = "pprof")]
-// use pprof::protos::Message; // Descomentado pois não é usado explicitamente
-// --- Fim das adições para Profiling com pprof ---
-
+// Variáveis globais para rastreamento de conexões e IDs
 lazy_static! {
     static ref CONNECTIONS: Mutex<HashMap<u32, SocketAddr>> = Mutex::new(HashMap::new());
     static ref NEXT_ID: Mutex<u32> = Mutex::new(1);
@@ -29,46 +25,77 @@ lazy_static! {
     };
 }
 
-// Constante definida corretamente
 const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
+const NUM_WORKER_TASKS: usize = 4;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     info!("Iniciando servidor Space Core na porta 8080...");
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    info!("Servidor escutando em 127.0.0.1:8080");
 
-    // Correção: Usando o nome correto da constante
+    let addr: SocketAddr = "127.0.0.1:8080".parse()?;
+    
+    let socket = Socket::new(
+        Domain::for_address(addr), // Obtém o domínio correto (IPv4 ou IPv6) do SocketAddr
+        Type::STREAM,            // **CORREÇÃO AQUI:** Usar Type::STREAM (constante)
+        Some(Protocol::TCP),     // **CORREÇÃO AQUI:** Usar Protocol::TCP (constante)
+    )?;
+    
+    socket.set_reuse_address(true)?;
+    #[cfg(target_os = "linux")]
+    socket.set_reuse_port(true)?;
+
+    socket.bind(&SockAddr::from(addr))?;
+    socket.listen(1024)?;
+
+    let listener = TcpListener::from_std(socket.into())?;
+
+    info!("Servidor escutando em 127.0.0.1:8080 com SO_REUSEPORT");
+
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
 
+    // --- Início do código para iniciar o Profiler ---
     #[cfg(feature = "pprof")]
     let profiler_guard = pprof::ProfilerGuardBuilder::default()
         .frequency(1000)
         .blocklist(&["libc", "libgcc", "pthread", "vdso", "tokio"])
         .build()
         .unwrap();
+    // --- Fim do código para iniciar o Profiler ---
+
+    // --- Balanceamento de Carga: Canais e Workers ---
+    let mut tx_senders: Vec<mpsc::Sender<TcpStream>> = Vec::with_capacity(NUM_WORKER_TASKS);
+
+    for i in 0..NUM_WORKER_TASKS {
+        let (tx, rx) = mpsc::channel::<TcpStream>(100);
+        tx_senders.push(tx);
+
+        let worker_semaphore = semaphore.clone();
+
+        tokio::spawn(async move {
+            info!("Worker {} iniciado e esperando por conexões...", i);
+            worker_task(rx, worker_semaphore).await;
+        });
+    }
+
+    let mut current_worker_idx = 0;
 
     let server_handle = tokio::spawn(async move {
         loop {
-            let permit = semaphore.clone().acquire_owned().await
-                .expect("Falha ao adquirir permissão do semáforo.");
-
             match listener.accept().await {
                 Ok((socket, addr)) => {
-                    let mut connections = CONNECTIONS.lock().await;
+                    let connections = CONNECTIONS.lock().await;
                     let id = *NEXT_ID.lock().await;
                     *NEXT_ID.lock().await += 1;
-                    connections.insert(id, addr);
-                    info!("[ID: {}] Nova conexão de: {}", id, addr);
+                    info!("[ID: {}] Conexão recebida de: {} (enviando para worker {})", id, addr, current_worker_idx);
 
-                    tokio::spawn(async move {
-                        handle_client(socket, addr, id).await;
-                        drop(permit);
-                        let mut connections = CONNECTIONS.lock().await;
-                        connections.remove(&id);
-                    });
+                    let tx = &tx_senders[current_worker_idx];
+                    if let Err(e) = tx.send(socket).await {
+                        error!("[ID: {}] Falha ao enviar conexão para o worker {}: {}", id, current_worker_idx, e);
+                    }
+
+                    current_worker_idx = (current_worker_idx + 1) % NUM_WORKER_TASKS;
                 }
                 Err(e) => error!("Erro ao aceitar conexão: {}", e),
             }
@@ -99,6 +126,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+async fn worker_task(mut receiver: mpsc::Receiver<TcpStream>, semaphore: Arc<Semaphore>) {
+    while let Some(stream) = receiver.recv().await {
+        let permit = semaphore.clone().acquire_owned().await
+            .expect("Falha ao adquirir permissão do semáforo no worker.");
+        
+        let peer_addr = stream.peer_addr().ok();
+        let id = *NEXT_ID.lock().await;
+
+        handle_client(stream, peer_addr.unwrap_or_else(|| "0.0.0.0:0".parse().unwrap()), id).await;
+        drop(permit);
+    }
+    info!("Worker task encerrada.");
 }
 
 async fn handle_client(mut stream: TcpStream, addr: SocketAddr, id: u32) {
