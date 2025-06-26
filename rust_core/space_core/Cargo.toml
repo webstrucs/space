@@ -15,8 +15,17 @@ socket2 = { version = "0.5", features = ["all"] }
 bytes = "1.0"
 libc = "0.2"
 pprof = { version = "0.13", features = ["flamegraph", "prost-codec"] }
-metrics = "0.21" # Nova dependência
-metrics-exporter-prometheus = "0.12" # Nova dependência
+metrics = "0.21"
+metrics-exporter-prometheus = "0.12"
+
+# Para TLS/SSL
+tokio-rustls = "0.26"
+rustls = { version = "0.22", features = ["ring"] }
+webpki-roots = "0.26"
+rustls-pemfile = "2.2"
+
+# Para parsing básico de HTTP
+httparse = "1.8"
 
 [profile.release]
 debug = true
