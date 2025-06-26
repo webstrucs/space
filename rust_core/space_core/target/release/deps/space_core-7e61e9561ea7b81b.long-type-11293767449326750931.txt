@@ -1,0 +1,1 @@
+std::iter::Chain<impl Iterator<Item = Result<PrivatePkcs8KeyDer<'static>, std::io::Error>> + '_, impl Iterator<Item = Result<PrivatePkcs1KeyDer<'static>, std::io::Error>> + '_>

@@ -1,0 +1,13 @@
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/libuuid-cf06ba53bd62ebad.rmeta: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/builder.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/error.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/non_nil.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/parser.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/fmt.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/timestamp.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/external.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/macros.rs
+
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/uuid-cf06ba53bd62ebad.d: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/builder.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/error.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/non_nil.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/parser.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/fmt.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/timestamp.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/external.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/macros.rs
+
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/lib.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/builder.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/error.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/non_nil.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/parser.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/fmt.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/timestamp.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/external.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-1.17.0/src/macros.rs:

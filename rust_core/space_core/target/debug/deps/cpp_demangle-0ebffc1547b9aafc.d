@@ -1,0 +1,10 @@
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/libcpp_demangle-0ebffc1547b9aafc.rmeta: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/logging.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/ast.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/error.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/index_str.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/subs.rs
+
+/home/aguiar/Dropbox/Profissional/Softs/Web/Development/Server/space/rust_core/space_core/target/debug/deps/cpp_demangle-0ebffc1547b9aafc.d: /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/lib.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/logging.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/ast.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/error.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/index_str.rs /home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/subs.rs
+
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/lib.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/logging.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/ast.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/error.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/index_str.rs:
+/home/aguiar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cpp_demangle-0.4.4/src/subs.rs:
