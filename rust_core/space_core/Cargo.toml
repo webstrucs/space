@@ -6,30 +6,40 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["full", "rt-multi-thread", "signal"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-lazy_static = "1.4.0"
-governor = { version = "0.10.0", features = ["std"] }
-socket2 = { version = "0.5", features = ["all"] }
-bytes = "1.0"
-libc = "0.2"
-pprof = { version = "0.13", features = ["flamegraph", "prost-codec"] }
-metrics = "0.21"
-metrics-exporter-prometheus = "0.12"
+# Dependências gerais e de runtime
+tokio = { version = "1.38.0", features = ["full", "rt-multi-thread", "signal"] } # Atualizado para a versão mais recente e com features corretas
+tracing = "0.1.40" # Atualizado para a versão mais recente
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt"] } # Atualizado e com features de logging
+lazy_static = "1.4.0" # Existente
+governor = { version = "0.10.0", features = ["std"] } # Existente
+socket2 = { version = "0.5.6", features = ["all"] } # Atualizado para a versão mais recente
+bytes = "1.6.0" # Atualizado para a versão mais recente
+libc = "0.2.153" # Atualizado para a versão mais recente
 
-# Para TLS/SSL
-tokio-rustls = "0.26"
-rustls = { version = "0.22", features = ["ring"] }
-webpki-roots = "0.26"
-rustls-pemfile = "2.2"
+# Dependências de profiling e métricas
+pprof = { version = "0.13.0", features = ["flamegraph", "prost-codec"], optional = true } # Existente, agora opcional
+metrics = "0.21.1" # Atualizado para a versão mais recente
+metrics-exporter-prometheus = "0.12.1" # Atualizado para a versão mais recente
+
+# Dependências para TLS/SSL
+tokio-rustls = "0.26.0" # Manter 0.26.0 para compatibilidade com rustls 0.22.x
+rustls = { version = "0.22.0", features = ["ring"] } # Manter 0.22.0 e "ring" para performance
+webpki-roots = "0.26.0" # Atualizado para a versão mais recente, compatível com rustls 0.22.x
+rustls-pemfile = "2.2.0" # Atualizado para a versão mais recente
+
+# Para tratamento de erros mais fácil
+anyhow = "1.0" # <--- Certifique-se de que esta linha esteja aqui
+
+# NOVAS DEPENDÊNCIAS para a Issue #014: Gerenciamento de Variáveis de Ambiente e Configuração
+envy = "0.4.2" # Para ler variáveis de ambiente
+serde = { version = "1.0.203", features = ["derive"] } # Atualizado para a versão mais recente e com feature "derive"
 
 # Para parsing básico de HTTP
-httparse = "1.8"
+httparse = "1.8.0" # Atualizado para a versão mais recente
 
 [profile.release]
 debug = true
 
 [features]
 default = []
-pprof = []
+pprof = ["dep:pprof"] # Corrigido para ser uma dependência opcional, como é o uso padrão de pprof
