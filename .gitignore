@@ -1,0 +1,32 @@
+# Crate binaries
+target/
+
+# IntelliJ Rust
+.idea/
+
+# OS generated files
+.DS_Store
+ehthumbs.db
+Thumbs.db
+.directory
+
+# Eclipse
+.project
+.classpath
+.settings/
+.loadpath
+
+# Linux
+*.so
+*.o
+*.d
+*.rlib
+
+# macOS
+*.dylib
+
+# Windows
+*.dll
+*.lib
+*.exe
+*.pdb
