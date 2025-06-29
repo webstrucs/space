@@ -4,21 +4,26 @@ use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use std::sync::Arc;
 use anyhow::Context;
-use tracing::{info, error, Level, debug, warn}; // Adicionado debug e warn
+use tracing::{info, error, Level, debug, warn};
 use tracing_subscriber::FmtSubscriber;
 use rand::rngs::OsRng;
 use rand::Rng;
-use tokio::sync::mpsc;
-use std::time::SystemTime; // Removido UNIX_EPOCH, pois só é usado em messages.rs
+use tokio::sync::{mpsc, broadcast};
+use std::time::SystemTime;
 
 mod handlers;
 mod metrics;
 mod tls;
 mod packets;
 mod messages;
+mod ipc;
 
-// Importar os tipos de mensagem.
-use messages::{Message, ControlCommand, ComponentState, ComponentMetrics, ErrorSeverity};
+// Importar os tipos de mensagem (agora vindos do Protobuf via messages.rs)
+use messages::{
+    Message, ComponentState, ComponentMetrics, ErrorSeverity,
+    ComponentConfig, ResourceLimits, // Removido 'ConfigureComponentData' que era redundante aqui
+    message, control_command
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,9 +42,13 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("Failed to install default crypto provider"))?;
     info!("Crypto provider initialized.");
 
-    // Canal para comunicação entre componentes
+    // Canais para comunicação interna entre componentes
     let (command_tx, mut command_rx) = mpsc::channel::<Message>(100);
-    let (status_tx, mut status_rx) = mpsc::channel::<Message>(100);
+    let (status_tx, mut status_rx) = mpsc::channel::<Message>(100); 
+
+    // Canais IPC dedicados para comunicação com a camada Python
+    let (ipc_command_tx, mut ipc_command_rx) = mpsc::channel::<Message>(100);
+    let (ipc_status_broadcast_tx, ipc_status_broadcast_rx) = broadcast::channel::<Message>(100); 
 
     // 1. Inicializa as métricas Prometheus
     metrics::init_metrics().await
@@ -57,173 +66,334 @@ async fn main() -> anyhow::Result<()> {
 
     // 3. Sistema de controle de componentes
     let status_tx_clone = status_tx.clone();
+    let ipc_status_broadcast_tx_clone = ipc_status_broadcast_tx.clone();
+
     let component_manager = tokio::spawn(async move {
         let mut http_running = false;
         let mut https_running = false;
         let mut packet_processor_running = false;
 
-        while let Some(message) = command_rx.recv().await {
-            if let Message::Command(cmd) = message {
-                match cmd {
-                    ControlCommand::StartComponent(name) => {
-                        info!("Starting component: {}", name);
-                        match name.as_str() {
-                            "http_server" => {
-                                http_running = true;
-                                let status = Message::new_status(
-                                    "http_server".to_string(),
-                                    true,
-                                    0, // uptime_seconds
-                                    0.1, // current_load
-                                    "HTTP server started successfully".to_string(),
-                                    ComponentState::Running,
-                                    None, // Sem métricas para este início
-                                );
-                                let _ = status_tx_clone.send(status).await;
+        loop {
+            tokio::select! {
+                // Prioriza comandos vindos do IPC (Python)
+                ipc_cmd_msg = ipc_command_rx.recv() => {
+                    if let Some(msg) = ipc_cmd_msg {
+                        if let Some(message::MessageType::Command(cmd)) = msg.message_type {
+                            info!("Comando recebido via IPC: {:?}", cmd);
+                            match cmd.command_type {
+                                Some(control_command::CommandType::StartComponent(name)) => {
+                                    info!("Starting component: {}", name);
+                                    match name.as_str() {
+                                        "http_server" => {
+                                            http_running = true;
+                                            let status = Message::new_status(
+                                                "http_server".to_string(), true, 0, 0.1,
+                                                "HTTP server started successfully".to_string(), ComponentState::Running, None,
+                                            );
+                                            let _ = status_tx_clone.send(status.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(status); 
+                                        }
+                                        "https_server" => {
+                                            https_running = true;
+                                            let status = Message::new_status(
+                                                "https_server".to_string(), true, 0, 0.1,
+                                                "HTTPS server started successfully".to_string(), ComponentState::Running, None,
+                                            );
+                                            let _ = status_tx_clone.send(status.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(status);
+                                        }
+                                        "packet_processor" => {
+                                            packet_processor_running = true;
+                                            let status = Message::new_status(
+                                                "packet_processor".to_string(), true, 0, 0.3,
+                                                "Packet processor started successfully".to_string(), ComponentState::Running, None,
+                                            );
+                                            let _ = status_tx_clone.send(status.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(status);
+                                        }
+                                        _ => {
+                                            error!("Unknown component received via IPC: {}", name);
+                                            let error_msg = Message::new_error(
+                                                404, format!("Component '{}' not found via IPC.", name),
+                                                "component_manager".to_string(), ErrorSeverity::Warning,
+                                            );
+                                            let _ = status_tx_clone.send(error_msg.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(error_msg);
+                                        }
+                                    }
+                                }
+                                Some(control_command::CommandType::StopComponent(name)) => {
+                                    info!("Stopping component via IPC: {}", name);
+                                    match name.as_str() {
+                                        "http_server" => http_running = false,
+                                        "https_server" => https_running = false,
+                                        "packet_processor" => packet_processor_running = false,
+                                        _ => error!("Unknown component to stop via IPC: {}", name),
+                                    }
+                                    let status = Message::new_status(
+                                        name.clone(), false, 0, 0.0,
+                                        format!("Component {} stopped via IPC.", name), ComponentState::Stopped, None,
+                                    );
+                                    let _ = status_tx_clone.send(status.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status);
+                                }
+                                Some(control_command::CommandType::RestartComponent(name)) => {
+                                    info!("Restarting component via IPC: {}", name);
+                                    let status_restarting = Message::new_status(
+                                        name.clone(), false, 0, 0.0,
+                                        format!("Component {} restarting via IPC...", name), ComponentState::Restarting, None,
+                                    );
+                                    let _ = status_tx_clone.send(status_restarting.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_restarting);
+                                    
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                    
+                                    let status_restarted = Message::new_status(
+                                        name.clone(), true, 0, 0.1,
+                                        format!("Component {} restarted via IPC.", name), ComponentState::Running, None,
+                                    );
+                                    let _ = status_tx_clone.send(status_restarted.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_restarted);
+                                }
+                                Some(control_command::CommandType::RequestStatus(_)) => {
+                                    info!("Global status requested via IPC");
+                                    let components = vec![
+                                        ("http_server", http_running),
+                                        ("https_server", https_running),
+                                        ("packet_processor", packet_processor_running),
+                                    ];
+                                    for (name, running) in components {
+                                        let status_msg = Message::new_status(
+                                            name.to_string(), running,
+                                            if running { rand::random::<u64>() % 3600 } else { 0 },
+                                            if running { rand::random::<f32>() * 0.8 } else { 0.0 },
+                                            if running { "Running normally".to_string() } else { "Stopped".to_string() },
+                                            if running { ComponentState::Running } else { ComponentState::Stopped },
+                                            None,
+                                        );
+                                        let _ = status_tx_clone.send(status_msg.clone()).await;
+                                        let _ = ipc_status_broadcast_tx_clone.send(status_msg);
+                                    }
+                                }
+                                Some(control_command::CommandType::RequestComponentStatus(name)) => {
+                                    info!("Status requested for component {} via IPC", name);
+                                    let (running, current_load, uptime, msg, state, metrics_option) = match name.as_str() {
+                                        "http_server" => (http_running, 0.1, rand::random::<u64>() % 3600, "HTTP server status".to_string(), if http_running { ComponentState::Running } else { ComponentState::Stopped }, None),
+                                        "https_server" => (https_running, 0.1, rand::random::<u64>() % 3600, "HTTPS server status".to_string(), if https_running { ComponentState::Running } else { ComponentState::Stopped }, None),
+                                        "packet_processor" => {
+                                            let proc_metrics = ComponentMetrics {
+                                                cpu_usage: 0.5,
+                                                memory_usage_mb: 512,
+                                                active_connections: 10,
+                                                total_requests: 0,
+                                                error_count: 0,
+                                                requests_per_second: 0.0,
+                                            };
+                                            (packet_processor_running, 0.3, rand::random::<u64>() % 3600, "Packet processor status".to_string(), if packet_processor_running { ComponentState::Running } else { ComponentState::Stopped }, Some(proc_metrics))
+                                        },
+                                        _ => (false, 0.0, 0, "Unknown component".to_string(), ComponentState::Unknown, None),
+                                    };
+                                    let status_msg = Message::new_status(
+                                        name, running, uptime, current_load, msg, state, metrics_option,
+                                    );
+                                    let _ = status_tx_clone.send(status_msg.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_msg);
+                                }
+                                Some(control_command::CommandType::ConfigureComponent(data)) => {
+                                    info!("Configuring component {} via IPC: {:?}", data.name, data.config);
+                                    let status_configured = Message::new_status(
+                                        data.name.clone(), true, 0, 0.0,
+                                        format!("Component {} configured via IPC.", data.name), ComponentState::Running, None,
+                                    );
+                                    let _ = status_tx_clone.send(status_configured.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_configured);
+                                }
+                                Some(control_command::CommandType::Shutdown(_)) => {
+                                    info!("Shutdown command received via IPC. Shutting down gracefully...");
+                                    break;
+                                }
+                                None => {
+                                    error!("Received IPC command with no specific command type.");
+                                    let error_msg = Message::new_error(
+                                        400, "IPC command has no type.".to_string(),
+                                        "component_manager".to_string(), ErrorSeverity::Warning,
+                                    );
+                                    let _ = status_tx_clone.send(error_msg.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(error_msg);
+                                }
                             }
-                            "https_server" => {
-                                https_running = true;
-                                let status = Message::new_status(
-                                    "https_server".to_string(),
-                                    true,
-                                    0, // uptime_seconds
-                                    0.1, // current_load
-                                    "HTTPS server started successfully".to_string(),
-                                    ComponentState::Running,
-                                    None, // Sem métricas
-                                );
-                                let _ = status_tx_clone.send(status).await;
-                            }
-                            "packet_processor" => {
-                                packet_processor_running = true;
-                                let status = Message::new_status(
-                                    "packet_processor".to_string(),
-                                    true,
-                                    0, // uptime_seconds
-                                    0.3, // current_load
-                                    "Packet processor started successfully".to_string(),
-                                    ComponentState::Running,
-                                    None, // Sem métricas
-                                );
-                                let _ = status_tx_clone.send(status).await;
-                            }
-                            _ => {
-                                error!("Unknown component: {}", name);
-                                let error_msg = Message::new_error(
-                                    404,
-                                    format!("Component '{}' not found for start command.", name),
-                                    "component_manager".to_string(),
-                                    ErrorSeverity::Warning,
-                                );
-                                let _ = status_tx_clone.send(error_msg).await;
-                            }
+                        } else {
+                            warn!("Received non-command message via IPC in component manager: {:?}", msg);
                         }
-                    }
-                    ControlCommand::StopComponent(name) => {
-                        info!("Stopping component: {}", name);
-                        match name.as_str() {
-                            "http_server" => http_running = false,
-                            "https_server" => https_running = false,
-                            "packet_processor" => packet_processor_running = false,
-                            _ => {
-                                error!("Unknown component: {}", name);
-                                let error_msg = Message::new_error(
-                                    404,
-                                    format!("Component '{}' not found for stop command.", name),
-                                    "component_manager".to_string(),
-                                    ErrorSeverity::Warning,
-                                );
-                                let _ = status_tx_clone.send(error_msg).await;
-                            }
-                        }
-                    }
-                    ControlCommand::RestartComponent(name) => {
-                        info!("Restarting component: {}", name);
-                        // Lógica de restart (parar e iniciar)
-                        let _ = status_tx_clone.send(Message::new_status(
-                            name.clone(),
-                            false, 0, 0.0,
-                            format!("Component {} restarting...", name),
-                            ComponentState::Restarting,
-                            None,
-                        )).await;
-                        // Simulando um restart
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        let _ = status_tx_clone.send(Message::new_status(
-                            name.clone(),
-                            true, 0, 0.1,
-                            format!("Component {} restarted.", name),
-                            ComponentState::Running,
-                            None,
-                        )).await;
-                    }
-                    ControlCommand::RequestStatus => {
-                        info!("Status requested for all components");
-                        // Enviar status de todos os componentes
-                        let components = vec![
-                            ("http_server", http_running),
-                            ("https_server", https_running),
-                            ("packet_processor", packet_processor_running),
-                        ];
-                        
-                        for (name, running) in components {
-                            let status_msg = Message::new_status(
-                                name.to_string(),
-                                running,
-                                if running { rand::random::<u64>() % 3600 } else { 0 },
-                                if running { rand::random::<f32>() * 0.8 } else { 0.0 },
-                                if running { "Running normally".to_string() } else { "Stopped".to_string() },
-                                if running { ComponentState::Running } else { ComponentState::Stopped },
-                                None, // Sem métricas para requisição geral
-                            );
-                            let _ = status_tx_clone.send(status_msg).await;
-                        }
-                    }
-                    ControlCommand::RequestComponentStatus(name) => {
-                        info!("Status requested for component: {}", name);
-                        let (running, current_load, uptime, msg, state, metrics_option) = match name.as_str() {
-                            "http_server" => (http_running, 0.1, rand::random::<u64>() % 3600, "HTTP server status".to_string(), if http_running { ComponentState::Running } else { ComponentState::Stopped }, None),
-                            "https_server" => (https_running, 0.1, rand::random::<u64>() % 3600, "HTTPS server status".to_string(), if https_running { ComponentState::Running } else { ComponentState::Stopped }, None),
-                            "packet_processor" => {
-                                let proc_metrics = ComponentMetrics::basic(0.5, 512, 10);
-                                (packet_processor_running, 0.3, rand::random::<u64>() % 3600, "Packet processor status".to_string(), if packet_processor_running { ComponentState::Running } else { ComponentState::Stopped }, Some(proc_metrics))
-                            },
-                            _ => (false, 0.0, 0, "Unknown component".to_string(), ComponentState::Unknown, None),
-                        };
-                        let status_msg = Message::new_status(
-                            name, running, uptime, current_load, msg, state, metrics_option,
-                        );
-                        let _ = status_tx_clone.send(status_msg).await;
-                    }
-                    ControlCommand::ConfigureComponent { name, config } => {
-                        info!("Configuring component {}: {:?}", name, config);
-                        let _ = status_tx_clone.send(Message::new_status(
-                            name.clone(),
-                            true, 0, 0.0,
-                            format!("Component {} configured.", name),
-                            ComponentState::Running, // Ou um estado de configurando
-                            None,
-                        )).await;
-                    }
-                    ControlCommand::Shutdown => {
-                        info!("Shutdown command received. Shutting down gracefully...");
-                        break; // Sai do loop para encerrar o component_manager
-                    }
-                    ControlCommand::Unknown => {
-                        // Já tratado no nível superior do match
+                    } else {
+                        info!("IPC command channel closed, component manager exiting.");
+                        break;
                     }
                 }
-            } else {
-                warn!("Received non-command message in component manager (unexpected): {:?}", message);
+                
+                // Processa comandos internos (do startup/simulação)
+                internal_cmd_msg = command_rx.recv() => {
+                    if let Some(message) = internal_cmd_msg {
+                        if let Some(message::MessageType::Command(cmd)) = message.message_type {
+                            match cmd.command_type {
+                                Some(control_command::CommandType::StartComponent(name)) => {
+                                    info!("Starting component internally: {}", name);
+                                    match name.as_str() {
+                                        "http_server" => {
+                                            http_running = true;
+                                            let status = Message::new_status(
+                                                "http_server".to_string(), true, 0, 0.1,
+                                                "HTTP server started successfully".to_string(), ComponentState::Running, None,
+                                            );
+                                            let _ = status_tx_clone.send(status.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(status);
+                                        }
+                                        "https_server" => {
+                                            https_running = true;
+                                            let status = Message::new_status(
+                                                "https_server".to_string(), true, 0, 0.1,
+                                                "HTTPS server started successfully".to_string(), ComponentState::Running, None,
+                                            );
+                                            let _ = status_tx_clone.send(status.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(status);
+                                        }
+                                        "packet_processor" => {
+                                            packet_processor_running = true;
+                                            let status = Message::new_status(
+                                                "packet_processor".to_string(), true, 0, 0.3,
+                                                "Packet processor started successfully".to_string(), ComponentState::Running, None,
+                                            );
+                                            let _ = status_tx_clone.send(status.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(status);
+                                        }
+                                        _ => {
+                                            error!("Unknown component internally: {}", name);
+                                            let error_msg = Message::new_error(
+                                                404, format!("Component '{}' not found internally.", name),
+                                                "component_manager".to_string(), ErrorSeverity::Warning,
+                                            );
+                                            let _ = status_tx_clone.send(error_msg.clone()).await;
+                                            let _ = ipc_status_broadcast_tx_clone.send(error_msg);
+                                        }
+                                    }
+                                }
+                                Some(control_command::CommandType::StopComponent(name)) => {
+                                    info!("Stopping component internally: {}", name);
+                                    match name.as_str() {
+                                        "http_server" => http_running = false,
+                                        "https_server" => https_running = false,
+                                        "packet_processor" => packet_processor_running = false,
+                                        _ => error!("Unknown component to stop internally: {}", name),
+                                    }
+                                    let status = Message::new_status(
+                                        name.clone(), false, 0, 0.0,
+                                        format!("Component {} stopped internally.", name), ComponentState::Stopped, None,
+                                    );
+                                    let _ = status_tx_clone.send(status.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status);
+                                }
+                                Some(control_command::CommandType::RestartComponent(name)) => {
+                                    info!("Restarting component internally: {}", name);
+                                    let status_restarting = Message::new_status(
+                                        name.clone(), false, 0, 0.0,
+                                        format!("Component {} restarting internally...", name), ComponentState::Restarting, None,
+                                    );
+                                    let _ = status_tx_clone.send(status_restarting.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_restarting);
+                                    
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                    
+                                    let status_restarted = Message::new_status(
+                                        name.clone(), true, 0, 0.1,
+                                        format!("Component {} restarted internally.", name), ComponentState::Running, None,
+                                    );
+                                    let _ = status_tx_clone.send(status_restarted.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_restarted);
+                                }
+                                Some(control_command::CommandType::RequestStatus(_)) => {
+                                    info!("Global status requested internally");
+                                    let components = vec![
+                                        ("http_server", http_running),
+                                        ("https_server", https_running),
+                                        ("packet_processor", packet_processor_running),
+                                    ];
+                                    for (name, running) in components {
+                                        let status_msg = Message::new_status(
+                                            name.to_string(), running,
+                                            if running { rand::random::<u64>() % 3600 } else { 0 },
+                                            if running { rand::random::<f32>() * 0.8 } else { 0.0 },
+                                            if running { "Running normally".to_string() } else { "Stopped".to_string() },
+                                            if running { ComponentState::Running } else { ComponentState::Stopped },
+                                            None,
+                                        );
+                                        let _ = status_tx_clone.send(status_msg.clone()).await;
+                                        let _ = ipc_status_broadcast_tx_clone.send(status_msg);
+                                    }
+                                }
+                                Some(control_command::CommandType::RequestComponentStatus(name)) => {
+                                    info!("Status requested for component {} internally", name);
+                                    let (running, current_load, uptime, msg, state, metrics_option) = match name.as_str() {
+                                        "http_server" => (http_running, 0.1, rand::random::<u64>() % 3600, "HTTP server status".to_string(), if http_running { ComponentState::Running } else { ComponentState::Stopped }, None),
+                                        "https_server" => (https_running, 0.1, rand::random::<u64>() % 3600, "HTTPS server status".to_string(), if https_running { ComponentState::Running } else { ComponentState::Stopped }, None),
+                                        "packet_processor" => {
+                                            let proc_metrics = ComponentMetrics {
+                                                cpu_usage: 0.5,
+                                                memory_usage_mb: 512,
+                                                active_connections: 10,
+                                                total_requests: 0,
+                                                error_count: 0,
+                                                requests_per_second: 0.0,
+                                            };
+                                            (packet_processor_running, 0.3, rand::random::<u64>() % 3600, "Packet processor status".to_string(), if packet_processor_running { ComponentState::Running } else { ComponentState::Stopped }, Some(proc_metrics))
+                                        },
+                                        _ => (false, 0.0, 0, "Unknown component".to_string(), ComponentState::Unknown, None),
+                                    };
+                                    let status_msg = Message::new_status(
+                                        name, running, uptime, current_load, msg, state, metrics_option,
+                                    );
+                                    let _ = status_tx_clone.send(status_msg.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_msg);
+                                }
+                                Some(control_command::CommandType::ConfigureComponent(data)) => {
+                                    info!("Configuring component internally {}: {:?}", data.name, data.config);
+                                    let status_configured = Message::new_status(
+                                        data.name.clone(), true, 0, 0.0,
+                                        format!("Component {} configured internally.", data.name), ComponentState::Running, None,
+                                    );
+                                    let _ = status_tx_clone.send(status_configured.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(status_configured);
+                                }
+                                Some(control_command::CommandType::Shutdown(_)) => {
+                                    info!("Internal Shutdown command received. Shutting down gracefully...");
+                                    break;
+                                }
+                                None => {
+                                    error!("Received internal command with no specific command type.");
+                                    let error_msg = Message::new_error(
+                                        400, "Internal command has no type.".to_string(),
+                                        "component_manager".to_string(), ErrorSeverity::Warning,
+                                    );
+                                    let _ = status_tx_clone.send(error_msg.clone()).await;
+                                    let _ = ipc_status_broadcast_tx_clone.send(error_msg);
+                                }
+                            }
+                        } else {
+                            warn!("Received non-command message internally in component manager: {:?}", message);
+                        }
+                    } else {
+                        info!("Internal command channel closed, component manager exiting.");
+                        break;
+                    }
+                }
             }
         }
     });
 
-    // Monitor de status
+    // Monitor de status (recebe de status_tx para logar)
     let status_monitor = tokio::spawn(async move {
         while let Some(message) = status_rx.recv().await {
-            match message { // Usar match em vez de if let para lidar com todos os Message variants
-                Message::Status(status) => {
+            match message.message_type {
+                Some(message::MessageType::Status(status)) => {
                     info!(
                         "Component Status - {}: {} (Load: {:.2}, Uptime: {}s) - {} - State: {:?} - Timestamp: {}",
                         status.component_name,
@@ -231,55 +401,35 @@ async fn main() -> anyhow::Result<()> {
                         status.current_load,
                         status.uptime_seconds,
                         status.message,
-                        status.component_state,
+                        ComponentState::try_from(status.component_state).unwrap_or(ComponentState::Unknown),
                         status.timestamp
                     );
-
-                    // Serializar e deserializar para testar o sistema de serialização
-                    let msg_to_test_serialization = Message::Status(status.clone());
-
-                    match msg_to_test_serialization.serialize() {
-                        Ok(serialized) => {
-                            match Message::deserialize(&serialized) {
-                                Ok(deserialized) => { // Aqui usamos 'deserialized'
-                                    info!("Message serialization/deserialization successful (size: {} bytes). Deserialized: {:?}", serialized.len(), deserialized);
-                                    // Adicionando um debug log para usar a variável e também verificar se deserializou corretamente.
-                                    // Você pode adicionar asserts mais rigorosos aqui se quiser, ex:
-                                    // if let Message::Status(s) = deserialized {
-                                    //     assert_eq!(s.component_name, status.component_name);
-                                    // }
-                                }
-                                Err(e) => {
-                                    error!("Failed to deserialize message for test: {}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to serialize message for test: {}", e);
-                        }
-                    }
                 }
-                Message::Error(error_msg) => {
+                Some(message::MessageType::Error(error_msg)) => {
                     error!(
                         "ERROR - Source: {} - Code: {} - Severity: {:?} - Description: {} - Timestamp: {}",
                         error_msg.source_component,
                         error_msg.error_code,
-                        error_msg.severity,
+                        ErrorSeverity::try_from(error_msg.severity).unwrap_or(ErrorSeverity::Info),
                         error_msg.description,
                         error_msg.timestamp
                     );
                 }
-                Message::Heartbeat { timestamp } => {
+                Some(message::MessageType::HeartbeatTimestamp(timestamp)) => {
                     debug!("Received Heartbeat at: {}", timestamp);
                 }
-                Message::Ack { message_id } => {
+                Some(message::MessageType::AckMessageId(message_id)) => {
                     debug!("Received Acknowledge for message ID: {}", message_id);
                 }
-                Message::Command(_) => { // Comandos não devem vir para o monitor de status
+                Some(message::MessageType::Command(_)) => {
                     warn!("Received Command message in status monitor (unexpected): {:?}", message);
+                }
+                None => {
+                    warn!("Received empty message type in status monitor: {:?}", message);
                 }
             }
         }
+        info!("Status monitor channel closed, exiting.");
     });
 
     // 4. Configura os listeners de rede
@@ -291,41 +441,51 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to bind HTTPS listener to 0.0.0.0:8443")?;
     info!("HTTPS listener bound to 0.0.0.0:8443");
 
+    // Iniciar o servidor IPC, passando o broadcast receiver para status
+    let ipc_server_handle = tokio::spawn(async move {
+        if let Err(e) = ipc::start_ipc_server(ipc_status_broadcast_rx, ipc_command_tx).await {
+            error!("Servidor IPC falhou: {:?}", e);
+        }
+        info!("Servidor IPC encerrado.");
+    });
+
     // Iniciar componentes automaticamente e enviar comandos de teste
     let command_tx_startup_clone = command_tx.clone();
+    let ipc_status_broadcast_tx_for_startup = ipc_status_broadcast_tx.clone();
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         info!("Sending startup commands to component manager...");
-        let _ = command_tx_startup_clone.send(Message::Command(ControlCommand::StartComponent("http_server".to_string()))).await;
-        let _ = command_tx_startup_clone.send(Message::Command(ControlCommand::StartComponent("https_server".to_string()))).await;
-        let _ = command_tx_startup_clone.send(Message::Command(ControlCommand::StartComponent("packet_processor".to_string()))).await;
+        
+        let _ = command_tx_startup_clone.send(Message::new_start_component_command("http_server".to_string())).await;
+        let _ = command_tx_startup_clone.send(Message::new_start_component_command("https_server".to_string())).await;
+        let _ = command_tx_startup_clone.send(Message::new_start_component_command("packet_processor".to_string())).await;
         
         // Exemplo de comando de configuração
         let mut settings = std::collections::HashMap::new();
         settings.insert("max_connections".to_string(), "200".to_string());
         settings.insert("buffer_size".to_string(), "8192".to_string());
-        let config_cmd = Message::Command(ControlCommand::ConfigureComponent {
-            name: "http_server".to_string(),
-            config: messages::ComponentConfig { // Usar messages::ComponentConfig
+        let config_cmd = Message::new_configure_component_command(
+            "http_server".to_string(),
+            ComponentConfig {
                 settings,
                 log_level: Some("INFO".to_string()),
-                max_resources: Some(messages::ResourceLimits { // Usar messages::ResourceLimits
+                max_resources: Some(ResourceLimits {
                     max_cpu: Some(0.7),
                     max_memory_mb: Some(512),
-                    max_connections: None, // Exemplo de campo opcional não fornecido
+                    max_connections: None,
                 }),
             },
-        });
+        );
         let _ = command_tx_startup_clone.send(config_cmd).await;
 
         // Requisitar status a cada 30 segundos
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             info!("Sending RequestStatus command...");
-            let _ = command_tx_startup_clone.send(Message::Command(ControlCommand::RequestStatus)).await;
+            let _ = command_tx_startup_clone.send(Message::new_request_status_command()).await;
             
             // Simular o envio de um heartbeat
-            let _ = command_tx_startup_clone.send(Message::new_heartbeat()).await;
+            let _ = ipc_status_broadcast_tx_for_startup.send(Message::new_heartbeat());
         }
     });
 
@@ -372,6 +532,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Exemplo de loop para processamento de pacotes RAW (se habilitado ou configurado)
     let status_tx_for_packets = status_tx.clone();
+    let ipc_status_broadcast_tx_for_packets = ipc_status_broadcast_tx.clone();
     tokio::spawn(async move {
         info!("Starting simulated RAW packet processing...");
         let mut rng = OsRng;
@@ -382,7 +543,7 @@ async fn main() -> anyhow::Result<()> {
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-            debug!("Simulating RAW packet reception..."); // Alterado para debug para menos logs verbosos
+            debug!("Simulating RAW packet reception...");
 
             crate::metrics::RAW_PACKETS_TOTAL.increment(1);
             packets_processed_total += 1;
@@ -405,7 +566,8 @@ async fn main() -> anyhow::Result<()> {
                     "packet_processor".to_string(),
                     ErrorSeverity::Error,
                 );
-                let _ = status_tx_for_packets.send(error_msg).await;
+                let _ = status_tx_for_packets.send(error_msg.clone()).await;
+                let _ = ipc_status_broadcast_tx_for_packets.send(error_msg);
             }
 
             // Calcular RPS simulado
@@ -419,10 +581,14 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // Enviar um status simulado para o monitor
-            let metrics = ComponentMetrics::basic(rng.gen::<f32>() * 0.5 + 0.1, rng.gen::<u64>() % 100 + 100, rng.gen::<u32>() % 20)
-                .with_total_requests(packets_processed_total)
-                .with_error_count(error_count_simulated)
-                .with_requests_per_second(rps);
+            let metrics = ComponentMetrics {
+                cpu_usage: rng.gen::<f32>() * 0.5 + 0.1,
+                memory_usage_mb: rng.gen::<u64>() % 100 + 100,
+                active_connections: rng.gen::<u32>() % 20,
+                total_requests: packets_processed_total,
+                error_count: error_count_simulated,
+                requests_per_second: rps,
+            };
             let status = Message::new_status(
                 "packet_processor".to_string(),
                 true,
@@ -430,10 +596,11 @@ async fn main() -> anyhow::Result<()> {
                 rng.gen::<f32>() * 0.5,
                 "Processing packets".to_string(),
                 ComponentState::Running,
-                Some(metrics), // Passa as métricas para new_status
+                Some(metrics),
             );
 
-            let _ = status_tx_for_packets.send(status).await;
+            let _ = status_tx_for_packets.send(status.clone()).await;
+            let _ = ipc_status_broadcast_tx_for_packets.send(status);
         }
     });
 
@@ -453,6 +620,9 @@ async fn main() -> anyhow::Result<()> {
         }
         _ = status_monitor => {
             error!("Status monitor finished unexpectedly.");
+        }
+        _ = ipc_server_handle => {
+            error!("Servidor IPC encerrado inesperadamente.");
         }
     }
 
