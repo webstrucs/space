@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 # Dependências gerais e de runtime para assincronicidade, logs e utilitários
-tokio = { version = "1.45", features = ["full", "rt-multi-thread", "signal", "sync"] }
+tokio = { version = "1.45.1", features = ["full", "macros", "rt-multi-thread", "net", "sync", "time", "io-util", "fs", "process", "signal", "rt"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 once_cell = "1.21"
@@ -17,40 +17,45 @@ bytes = "1.10"
 libc = "0.2.174"
 
 # Dependências HTTP e Rand para handlers e simulações
-hyper = { version = "0.14.32", features = ["full"] } # Manter versão compatível
+hyper = { version = "0.14.32", features = ["full"] }
 rand = "0.8.5"
 
 # Dependências de profiling e métricas para observabilidade
 pprof = { version = "0.13.0", features = ["flamegraph", "prost-codec"], optional = true }
-metrics = "0.21.1" # Manter versão compatível
-metrics-exporter-prometheus = "0.12.2" # Manter versão compatível
+metrics = "0.21.1"
+metrics-exporter-prometheus = "0.12.2"
 
 # Dependências para TLS/SSL para conexões seguras
 tokio-rustls = "0.26.2"
-rustls = { version = "0.23.28", features = ["aws_lc_rs"] } # Atualizar e usar aws_lc_rs
+rustls = { version = "0.23.28", features = ["aws_lc_rs"] }
 webpki-roots = "0.26.11"
 rustls-pemfile = "2.2.0"
-rustls-pki-types = "1.12.0" # Atualizar
+rustls-pki-types = "1.12.0" 
 
 # Para tratamento de erros mais fácil e consistente
 anyhow = "1.0.98"
 
 # Gerenciamento de Variáveis de Ambiente e Configuração
 envy = "0.4.2"
-serde = { version = "1.0.219", features = ["derive"] }
-
-# Para parsing básico de HTTP
+serde = { version = "1.0.219", features = ["derive"] } # Mantido para testes internos
 httparse = "1.10.1"
-
-# Para parsing de bytes
 byteorder = "1.5.0"
 
 # DEPENDÊNCIAS PARA SOCKET RAW E PARSING DE PACOTES DE REDE
-pnet = "0.34.0" # Manter versão estável
+pnet = "0.34.0"
 pnet_packet = "0.34.0"
 
-# SERIALIZAÇÃO DE DADOS
-bincode = "1.3.3" # Manter versão 1.x por compatibilidade
+# SERIALIZAÇÃO DE DADOS (bincode mantido para uso interno/testes temporários)
+bincode = "1.3.3" 
+
+# --- NOVAS DEPENDÊNCIAS PARA PROTOCOL BUFFERS ---
+prost = "0.12"        # Biblioteca para serialização/desserialização Protobuf
+prost-types = "0.12"  # Tipos padrão do Protobuf (Timestamp, Any, etc.)
+# -------------------------------------------------
+
+[build-dependencies] # Dependências para o script de build (para gerar código Protobuf)
+prost-build = "0.12"
+# -------------------------------------------------
 
 [profile.release]
 debug = true

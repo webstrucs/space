@@ -1,0 +1,100 @@
+// space/rust_core/space_core/proto/messages.proto
+
+syntax = "proto3"; // Usar a sintaxe Protobuf 3
+
+package space_core.messages; // Define um pacote para evitar colisões de nome
+
+// --- Comandos de Controle (Enviadas da Camada Superior para a Inferior) ---
+message ControlCommand {
+  oneof command_type { // Um campo `oneof` para representar um enum
+    string start_component = 1; // Sinal para iniciar um componente específico pelo seu nome.
+    string stop_component = 2;  // Sinal para parar um componente específico pelo seu nome.
+    string restart_component = 3; // Sinal para reiniciar um componente.
+    bool request_status = 4; // Requisita o status atual de um componente ou do sistema. (bool para indicar a requisição)
+    string request_component_status = 5; // Requisita o status de um componente específico.
+    ConfigureComponentData configure_component = 6; // Configura parâmetros de um componente.
+    bool shutdown = 7; // Comando para parar o sistema inteiro. (bool para indicar o comando)
+  }
+}
+
+message ConfigureComponentData { // Mensagem auxiliar para o comando ConfigureComponent
+  string name = 1;
+  ComponentConfig config = 2;
+}
+
+// Configuração específica para componentes.
+message ComponentConfig {
+  map<string, string> settings = 1; // Configurações específicas como pares chave-valor.
+  optional string log_level = 2; // Nível de log para o componente.
+  optional ResourceLimits max_resources = 3; // Recursos máximos permitidos.
+}
+
+// Limites de recursos para componentes.
+message ResourceLimits {
+  optional float max_cpu = 1; // Uso máximo de CPU (0.0 a 1.0).
+  optional uint64 max_memory_mb = 2; // Uso máximo de memória em MB.
+  optional uint32 max_connections = 3; // Número máximo de conexões simultâneas.
+}
+
+// --- Mensagens de Status (Enviadas da Camada Inferior para a Superior) ---
+message StatusMessage {
+  string component_name = 1; // Nome do componente ao qual o status se refere.
+  bool is_running = 2; // Indica se o componente está atualmente em execução.
+  uint64 uptime_seconds = 3; // Tempo de atividade do componente em segundos.
+  float current_load = 4; // Carga atual do componente (ex: uso de CPU, memória, etc.).
+  string message = 5; // Mensagem adicional de texto para detalhes ou erros.
+  uint64 timestamp = 6; // Timestamp da mensagem (epoch seconds).
+  ComponentState component_state = 7; // Estado detalhado do componente (enum Protobuf).
+  optional ComponentMetrics metrics = 8; // Métricas específicas do componente.
+}
+
+// Estado detalhado de um componente (enum Protobuf).
+enum ComponentState {
+  UNKNOWN = 0; // Estado desconhecido (padrão para enums Protobuf)
+  STARTING = 1; // Componente inicializando.
+  RUNNING = 2; // Componente rodando normalmente.
+  STOPPING = 3; // Componente parando.
+  STOPPED = 4; // Componente parado.
+  ERROR_STATE = 5; // Componente em erro (renomeado para evitar conflito com palavra-chave 'Error')
+  RESTARTING = 6; // Componente reiniciando.
+}
+
+// Métricas específicas de um componente.
+message ComponentMetrics {
+  float cpu_usage = 1; // Uso atual de CPU (0.0 a 1.0).
+  uint64 memory_usage_mb = 2; // Uso atual de memória em MB.
+  uint32 active_connections = 3; // Número de conexões ativas.
+  uint64 total_requests = 4; // Número total de requisições processadas.
+  uint64 error_count = 5; // Número de erros registrados.
+  float requests_per_second = 6; // Taxa de requisições por segundo.
+}
+
+// --- Mensagens de Erro ---
+message ErrorMessage {
+  uint32 error_code = 1; // Código do erro.
+  string description = 2; // Descrição do erro.
+  string source_component = 3; // Componente que gerou o erro.
+  uint64 timestamp = 4; // Timestamp do erro.
+  ErrorSeverity severity = 5; // Nível de severidade do erro (enum Protobuf).
+  optional string debug_info = 6; // Informações adicionais para debug.
+}
+
+// Nível de severidade do erro (enum Protobuf).
+enum ErrorSeverity {
+  INFO = 0; // Informação apenas (padrão)
+  WARNING = 1; // Aviso.
+  ERROR = 2; // Erro que pode ser recuperado.
+  CRITICAL = 3; // Erro crítico que pode causar falha do sistema.
+}
+
+// --- Mensagem Genérica (Wrapper para todos os tipos de mensagem IPC) ---
+// O `Message` agora encapsula todos os outros tipos de mensagem usando `oneof`.
+message Message {
+  oneof message_type {
+    ControlCommand command = 1;
+    StatusMessage status = 2;
+    ErrorMessage error = 3;
+    uint64 heartbeat_timestamp = 4; // Mensagem de heartbeat (apenas um timestamp)
+    string ack_message_id = 5; // Acknowledgment de uma mensagem recebida (apenas um ID)
+  }
+}
