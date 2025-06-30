@@ -6,13 +6,12 @@ use tracing::{info, error, debug, warn};
 use anyhow::{Result, Context};
 use std::path::Path;
 use tokio::sync::{mpsc, broadcast};
+use tokio_util::sync::CancellationToken; // Importar CancellationToken
 
-// Permitir imports não utilizados, pois esses tipos podem ser acessados via `Message` enum
-// e são parte da API de mensagens (principalmente para clareza ou testes futuros).
 #[allow(unused_imports)]
 use crate::messages::{
     Message, ControlCommand, StatusMessage, ErrorMessage, ComponentState, ErrorSeverity,
-    message, control_command // Precisamos importar os módulos internos gerados para acessar os enums `oneof`
+    message, control_command
 };
 
 /// O caminho para o socket de domínio Unix.
@@ -25,12 +24,13 @@ const IPC_SOCKET_PATH: &str = "/tmp/space_core_ipc.sock";
 /// bidirecional para enviar mensagens de status e receber comandos.
 ///
 /// Argumentos:
-/// - `status_broadcast_rx`: Um receiver para o canal de broadcast de status. Cada cliente IPC
-///   terá sua própria cópia clonada deste receiver.
+/// - `status_broadcast_rx`: Um receiver para o canal de broadcast de status.
 /// - `command_tx`: Canal para enviar comandos recebidos do Python de volta para o core Rust.
+/// - `shutdown_token`: O token de cancelamento para sinalizar o graceful shutdown.
 pub async fn start_ipc_server(
     status_broadcast_rx: broadcast::Receiver<Message>,
     command_tx: mpsc::Sender<Message>,
+    shutdown_token: CancellationToken, // Recebe o token de shutdown
 ) -> Result<()> {
     // 1. Limpar socket antigo se existir
     if Path::new(IPC_SOCKET_PATH).exists() {
@@ -47,41 +47,68 @@ pub async fn start_ipc_server(
     info!("Servidor IPC UDS escutando em: {}", IPC_SOCKET_PATH);
 
     loop {
-        // 3. Aceitar novas conexões de clientes
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                info!("Conexão IPC UDS aceita.");
-
-                let cmd_tx_for_handler = command_tx.clone();
-                let status_rx_for_handler = status_broadcast_rx.resubscribe(); 
-
-                tokio::spawn(async move {
-                    if let Err(e) = handle_ipc_client(stream, cmd_tx_for_handler, status_rx_for_handler).await {
-                        error!("Erro ao lidar com cliente IPC: {:?}", e);
-                    }
-                });
+        tokio::select! {
+            // Prioriza o sinal de shutdown
+            _ = shutdown_token.cancelled() => {
+                info!("IPC server received shutdown signal. Stopping accepting new connections.");
+                break; // Sai do loop de aceitação
             }
-            Err(e) => {
-                error!("Erro ao aceitar conexão IPC: {:?}", e);
-                return Err(e).context("Erro crítico no listener IPC");
+            // Aceitar novas conexões de clientes
+            accept_result = listener.accept() => { // Remove .await aqui
+                match accept_result.context("Failed to accept IPC connection") {
+                    Ok((stream, _addr)) => {
+                        info!("Conexão IPC UDS aceita.");
+
+                        let cmd_tx_for_handler = command_tx.clone();
+                        let status_rx_for_handler = status_broadcast_rx.resubscribe();
+                        let shutdown_token_for_handler = shutdown_token.clone(); // Clona o token para o handler
+
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_ipc_client(
+                                stream, 
+                                cmd_tx_for_handler, 
+                                status_rx_for_handler, 
+                                shutdown_token_for_handler // Passa o token para o handler do cliente
+                            ).await
+                                .context("Error handling IPC client connection")
+                            {
+                                error!("{:?}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("{:?}", e);
+                        // Este é um erro crítico para o listener, podemos decidir se queremos
+                        // tentar novamente ou falhar. Por enquanto, falha.
+                        return Err(e);
+                    }
+                }
             }
         }
     }
+
+    // Opcional: Remover o socket no shutdown limpo
+    info!("Removendo socket IPC: {}", IPC_SOCKET_PATH);
+    tokio::fs::remove_file(IPC_SOCKET_PATH)
+        .await
+        .context(format!("Falha ao remover o socket IPC em {} durante o shutdown", IPC_SOCKET_PATH))?;
+
+    info!("Servidor IPC UDS encerrado.");
+    Ok(())
 }
 
 /// Lida com uma única conexão de cliente IPC UDS.
-///
-/// Esta função estabelece dois loops principais: um para receber comandos do cliente
-/// e outro para enviar mensagens de status do Rust para o cliente.
 ///
 /// Argumentos:
 /// - `stream`: O `UnixStream` para a conexão cliente-servidor.
 /// - `command_tx`: Sender para enviar comandos recebidos do cliente de volta ao core Rust.
 /// - `status_rx`: Receiver para obter mensagens de status do core Rust para enviar ao cliente.
+/// - `shutdown_token`: O token de cancelamento para sinalizar o graceful shutdown desta conexão.
 async fn handle_ipc_client(
     stream: UnixStream,
     command_tx: mpsc::Sender<Message>,
     mut status_rx: broadcast::Receiver<Message>,
+    shutdown_token: CancellationToken, // Recebe o token de shutdown
 ) -> Result<()> {
     info!("Iniciando handler para cliente IPC.");
 
@@ -91,9 +118,14 @@ async fn handle_ipc_client(
 
     loop {
         tokio::select! {
+            // Prioriza o sinal de shutdown
+            _ = shutdown_token.cancelled() => {
+                info!("IPC client handler received shutdown signal. Exiting loop.");
+                break; // Sai do loop de manipulação do cliente
+            }
             // --- Parte de Recebimento de Comandos do Python ---
-            read_result = reader.read_exact(&mut header_buffer) => {
-                match read_result {
+            read_result = reader.read_exact(&mut header_buffer) => { // Remove .await
+                match read_result.context("Failed to read IPC message header") {
                     Ok(0) => {
                         info!("Cliente IPC desconectado.");
                         break;
@@ -109,14 +141,19 @@ async fn handle_ipc_client(
 
                         read_buffer.resize(message_size, 0u8);
                         
-                        match reader.read_exact(&mut read_buffer).await {
+                        match reader.read_exact(&mut read_buffer).await // Mantém .await aqui
+                            .context("Failed to read IPC message data")
+                        {
                             Ok(_) => {
                                 match Message::deserialize(&read_buffer) {
                                     Ok(message) => {
                                         info!("Comando IPC recebido: {:?}", message);
-                                        if let Err(e) = command_tx.send(message).await {
-                                            error!("Falha ao enviar comando para o component_manager (canal fechado ou erro): {:?}", e);
-                                            break;
+                                        if let Err(e) = command_tx.send(message).await
+                                            .context("Failed to send IPC command to component_manager (channel error)")
+                                        {
+                                            error!("{:?}", e);
+                                            // Se o canal interno fechou, é um erro fatal para esta conexão IPC
+                                            break; 
                                         }
                                     }
                                     Err(e) => {
@@ -127,34 +164,38 @@ async fn handle_ipc_client(
                                             "ipc_server".to_string(),
                                             ErrorSeverity::Error,
                                         );
-                                        if let Err(write_err) = send_message_to_client(&mut writer, err_msg).await {
-                                            error!("Falha ao enviar erro de desserialização de volta ao cliente: {:?}", write_err);
+                                        if let Err(write_err) = send_message_to_client(&mut writer, err_msg).await
+                                            .context("Failed to send deserialization error back to IPC client")
+                                        {
+                                            error!("{:?}", write_err);
                                         }
                                     }
                                 }
                             }
                             Err(e) => {
-                                error!("Falha ao ler dados da mensagem IPC: {:?}", e);
+                                error!("{:?}", e);
                                 break;
                             }
                         }
                     }
                     Err(e) => {
-                        error!("Falha ao ler cabeçalho da mensagem IPC: {:?}", e);
+                        error!("{:?}", e);
                         break;
                     }
                 }
             }
 
             // --- Parte de Envio de Status para o Python ---
-            status_message = status_rx.recv() => {
+            status_message = status_rx.recv() => { // Remove .await
                 match status_message {
                     Ok(msg) => {
                         if matches!(msg.message_type, Some(message::MessageType::Status(_))) ||
                            matches!(msg.message_type, Some(message::MessageType::Error(_))) {
                             info!("Enviando mensagem de status IPC: {:?}", msg);
-                            if let Err(e) = send_message_to_client(&mut writer, msg).await {
-                                error!("Falha ao enviar mensagem de status IPC: {:?}", e);
+                            if let Err(e) = send_message_to_client(&mut writer, msg).await
+                                .context("Failed to send IPC status message to client")
+                            {
+                                error!("{:?}", e);
                                 break;
                             }
                         } else {
@@ -173,6 +214,7 @@ async fn handle_ipc_client(
         }
     }
 
+    info!("IPC client handler finished.");
     Ok(())
 }
 
