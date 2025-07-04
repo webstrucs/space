@@ -1,20 +1,32 @@
 // Conteúdo para: rs_core/src/network/mod.rs
 
-// Novas importações necessárias
-use crate::buffer; // Importa nosso novo módulo (ainda não usado, mas pronto para o futuro)
-use bytes::BytesMut; // A estrutura de buffer principal que usaremos
+use bytes::BytesMut;
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt}; // AsyncWriteExt é novo
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-type ConnectionMap = Arc<Mutex<HashMap<usize, SocketAddr>>>;
+// Tarefa 2: Enum para representar o estado da conexão na nossa aplicação.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConnectionState {
+    Active,
+    ShuttingDown,
+}
+
+// Tarefa 2: Struct para guardar os dados de uma conexão ativa.
+#[derive(Debug, Clone)]
+pub struct Connection {
+    pub addr: SocketAddr,
+    pub state: ConnectionState,
+}
+
+// Tarefa 2: Atualizamos nosso mapa para armazenar a struct Connection completa.
+type ConnectionMap = Arc<Mutex<HashMap<usize, Connection>>>;
 
 pub async fn run_server() -> Result<(), Box<dyn Error>> {
-    // ... (o código da função run_server continua o mesmo até o tokio::spawn) ...
     let addr = "127.0.0.1:8080";
     let listener = TcpListener::bind(addr).await?;
     println!("Servidor ouvindo em http://{}", addr);
@@ -23,10 +35,10 @@ pub async fn run_server() -> Result<(), Box<dyn Error>> {
     let connections: ConnectionMap = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
+        // Tarefa 1: O accept() conclui o handshake TCP.
         match listener.accept().await {
             Ok((socket, addr)) => {
                 println!("Nova conexão de: {}", addr);
-
                 let connections_clone = Arc::clone(&connections);
                 let counter_clone = Arc::clone(&connection_id_counter);
 
@@ -41,8 +53,6 @@ pub async fn run_server() -> Result<(), Box<dyn Error>> {
     }
 }
 
-
-/// Gerencia o ciclo de vida de uma única conexão de cliente.
 async fn handle_connection(
     mut socket: TcpStream,
     addr: SocketAddr,
@@ -50,15 +60,18 @@ async fn handle_connection(
     id_counter: Arc<AtomicUsize>,
 ) {
     let conn_id = id_counter.fetch_add(1, Ordering::SeqCst);
-    connections.lock().unwrap().insert(conn_id, addr);
+    
+    // Tarefa 2: Ao aceitar a conexão (pós-handshake), criamos o estado inicial.
+    let new_connection = Connection {
+        addr,
+        state: ConnectionState::Active, // A conexão começa como Ativa.
+    };
+    connections.lock().unwrap().insert(conn_id, new_connection);
     println!("[{}] Conexão estabelecida. Total de conexões: {}", conn_id, connections.lock().unwrap().len());
 
-    // Usa BytesMut da crate `bytes`. É um buffer dinâmico e eficiente.
     let mut buffer = BytesMut::with_capacity(1024);
 
     loop {
-        // Tarefa 2: Implementar leitura de dados do socket para o buffer.
-        // `read_buf` tenta ler dados para o buffer sem sobrescrever o que já existe.
         match socket.read_buf(&mut buffer).await {
             Ok(0) => {
                 println!("[{}] Conexão fechada pelo cliente.", conn_id);
@@ -66,15 +79,10 @@ async fn handle_connection(
             }
             Ok(n) => {
                 println!("[{}] {} bytes lidos.", conn_id, n);
-
-                // Tarefa 3: Implementar escrita de dados do buffer para o socket.
-                // Lógica de "Echo": escreve de volta exatamente o que foi lido.
                 if let Err(e) = socket.write_all(&buffer).await {
                     eprintln!("[{}] Erro ao escrever para o socket: {}", conn_id, e);
                     break;
                 }
-                
-                // Limpa o buffer para a próxima leitura.
                 buffer.clear();
             }
             Err(e) => {
@@ -83,7 +91,16 @@ async fn handle_connection(
             }
         }
     }
-
+    
+    // Tarefa 3: Implementar fechamento elegante.
+    // Antes de remover do mapa, tentamos um shutdown gracioso do socket.
+    if let Err(e) = socket.shutdown().await {
+        eprintln!("[{}] Erro durante o shutdown do socket: {}", conn_id, e);
+    } else {
+        println!("[{}] Socket encerrado elegantemente (FIN enviado).", conn_id);
+    }
+    
+    // Bloco de limpeza final
     connections.lock().unwrap().remove(&conn_id);
-    println!("[{}] Conexão encerrada. Total de conexões: {}", conn_id, connections.lock().unwrap().len());
+    println!("[{}] Conexão removida do mapa. Total de conexões: {}", conn_id, connections.lock().unwrap().len());
 }
