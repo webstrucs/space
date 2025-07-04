@@ -1,3 +1,11 @@
+# space/.gitignore
 
-
+# Ignorar diretórios de build do Rust
 **/target/
+
+# Ignorar arquivos de configuração de IDEs comuns (opcional, mas recomendado)
+.vscode/
+.idea/
+
+# Ignorar arquivos de sistema do macOS (opcional)
+.DS_Store
