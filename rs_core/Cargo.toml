@@ -9,3 +9,7 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 socket2 = "0.5"
+
+# Adicione este bloco inteiro no final do seu Cargo.toml
+[profile.release]
+debug = true

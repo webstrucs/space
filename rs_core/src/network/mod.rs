@@ -1,15 +1,12 @@
 // Conteúdo para: rs_core/src/network/mod.rs
 
-use bytes::BytesMut;
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::{IpAddr, SocketAddr}; // IpAddr foi adicionado
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant}; // Instant foi adicionado
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::timeout;
 use socket2::SockRef;
 
 // Constantes para o Rate Limiting
@@ -72,7 +69,7 @@ pub async fn run_server() -> Result<(), Box<dyn Error>> {
                 println!("Nova conexão de: {}", addr);
                 let connections_clone = Arc::clone(&connections);
                 let counter_clone = Arc::clone(&connection_id_counter);
-                let rate_limiter_clone = Arc::clone(&rate_limiter);
+                let _rate_limiter_clone = Arc::clone(&rate_limiter);
 
                 tokio::spawn(async move {
                     handle_connection(socket, addr, connections_clone, counter_clone).await;
@@ -86,10 +83,10 @@ pub async fn run_server() -> Result<(), Box<dyn Error>> {
 }
 // ... (a função handle_connection continua a mesma) ...
 async fn handle_connection(
-    mut socket: TcpStream,
-    addr: SocketAddr,
-    connections: ConnectionMap,
-    id_counter: Arc<AtomicUsize>,
-) {
+    _socket: TcpStream,
+    _addr: SocketAddr,
+    _connections: ConnectionMap,
+    _id_counter: Arc<AtomicUsize>,
+) { 
     // ...
 }
