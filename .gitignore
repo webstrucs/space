@@ -9,3 +9,8 @@
 
 # Ignorar arquivos de sistema do macOS (opcional)
 .DS_Store
+
+# Arquivos de dados de profiling e output
+perf.data
+perf.data*
+flamegraph.svg
