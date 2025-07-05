@@ -1,17 +1,39 @@
-// Conteúdo para: rs_core/src/bin/server.rs
+// Conteúdo final e corrigido para: rs_core/src/bin/server.rs
 
-// Importa a função que criamos na nossa biblioteca `rs_core`.
-use rs_core::network::run_server;
+use axum::{routing::get, Router};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use std::net::SocketAddr;
+use tracing_subscriber::FmtSubscriber;
 
-// O atributo `#[tokio::main]` transforma a função `main` assíncrona
-// em um ponto de entrada síncrono e inicializa o runtime do Tokio.
+// Esta função irá rodar o servidor web para as métricas
+async fn start_metrics_server(handle: PrometheusHandle) {
+    let app = Router::new().route("/metrics", get(move || async move { handle.render() }));
+    let addr = SocketAddr::from(([127, 0, 0, 1], 9090));
+    tracing::info!("Servidor de métricas ouvindo em http://{}", addr);
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
 #[tokio::main]
 async fn main() {
-    println!("[INFO] Iniciando o servidor Space...");
+    // 1. Configura o Logging
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Falha ao configurar o subscriber de tracing");
 
-    // Chama a função principal do nosso módulo de rede e aguarda sua conclusão.
-    if let Err(e) = run_server().await {
-        // Se a função run_server retornar um erro, imprime o erro na saída de erro padrão.
-        eprintln!("Erro no servidor: {}", e);
+    // 2. Configura o Coletor de Métricas Prometheus
+    let builder = PrometheusBuilder::new();
+    let handle = builder
+        .install_recorder()
+        .expect("Falha ao instalar o recorder de métricas");
+
+    // 3. Inicia o servidor de métricas em uma tarefa separada
+    tokio::spawn(start_metrics_server(handle));
+
+    // 4. Inicia o servidor principal
+    if let Err(e) = rs_core::network::run_server().await {
+        tracing::error!(error = %e, "Erro fatal no servidor");
     }
 }
