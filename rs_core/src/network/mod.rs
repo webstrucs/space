@@ -1,92 +1,118 @@
-// Conteúdo para: rs_core/src/network/mod.rs
+// Conteúdo final e corrigido para: rs_core/src/network/mod.rs
 
+use socket2::{Socket, Domain, Type, Protocol};
 use std::collections::HashMap;
 use std::error::Error;
-use std::net::{IpAddr, SocketAddr}; // IpAddr foi adicionado
-use std::sync::atomic::AtomicUsize;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant}; // Instant foi adicionado
+use std::time::Duration;
+use tokio::io::AsyncWriteExt; // AsyncReadExt agora será usada
 use tokio::net::{TcpListener, TcpStream};
-use socket2::SockRef;
 
-// Constantes para o Rate Limiting
-const RATE_LIMIT_WINDOW_SECS: u64 = 60; // Janela de tempo de 1 minuto
-const RATE_LIMIT_MAX_CONN: usize = 10;   // Máximo de 10 conexões por IP por minuto
+const TCP_KEEPALIVE_SECS: u64 = 60;
 
-// ... (structs e types continuam os mesmos) ...
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionState { Active, ShuttingDown }
 #[derive(Debug, Clone)]
 pub struct Connection { pub addr: SocketAddr, pub state: ConnectionState }
 type ConnectionMap = Arc<Mutex<HashMap<usize, Connection>>>;
-// Novo tipo para o nosso mapa de rate limiting
-type RateLimitMap = Arc<Mutex<HashMap<IpAddr, Vec<Instant>>>>;
 
 pub async fn run_server() -> Result<(), Box<dyn Error>> {
-    let addr = "127.0.0.1:8080";
-    let listener = TcpListener::bind(addr).await?;
-    println!("Servidor ouvindo em http://{}", addr);
+    let addr: SocketAddr = "127.0.0.1:8080".parse()?;
+    let num_workers = num_cpus::get();
+    println!("[INFO] Utilizando {} workers (um por núcleo de CPU).", num_workers);
 
     let connection_id_counter = Arc::new(AtomicUsize::new(0));
     let connections: ConnectionMap = Arc::new(Mutex::new(HashMap::new()));
-    // Inicializa a estrutura de dados para o rate limiter
-    let rate_limiter: RateLimitMap = Arc::new(Mutex::new(HashMap::new()));
+    
+    let mut worker_handles = Vec::with_capacity(num_workers);
 
+    for i in 0..num_workers {
+        let connections_clone = Arc::clone(&connections);
+        let counter_clone = Arc::clone(&connection_id_counter);
+        
+        let listener = create_reusable_port_listener(addr)?;
+        println!("[Worker {}] Ouvindo em http://{}", i, addr);
+        
+        let handle = tokio::spawn(async move {
+            run_worker(i, listener, connections_clone, counter_clone).await;
+        });
+        worker_handles.push(handle);
+    }
+
+    for handle in worker_handles {
+        handle.await?;
+    }
+
+    Ok(())
+}
+
+async fn run_worker(
+    worker_id: usize,
+    listener: TcpListener,
+    connections: ConnectionMap,
+    id_counter: Arc<AtomicUsize>,
+) {
     loop {
         match listener.accept().await {
             Ok((socket, addr)) => {
-                // --- INÍCIO DA LÓGICA DE RATE LIMITING ---
-                let client_ip = addr.ip();
-                let mut limiter = rate_limiter.lock().unwrap();
-
-                // Obtém a lista de timestamps para este IP, ou cria uma nova se não existir
-                let timestamps = limiter.entry(client_ip).or_insert_with(Vec::new);
-
-                // Remove timestamps que estão fora da janela de tempo
-                let now = Instant::now();
-                timestamps.retain(|&t| now.duration_since(t).as_secs() < RATE_LIMIT_WINDOW_SECS);
-
-                // Verifica se o limite foi excedido
-                if timestamps.len() >= RATE_LIMIT_MAX_CONN {
-                    eprintln!("[SEGURANÇA] Rate limit excedido para o IP: {}. Conexão recusada.", client_ip);
-                    continue; // Pula para a próxima iteração do loop, descartando a conexão
-                }
-
-                // Adiciona o timestamp da conexão atual
-                timestamps.push(now);
-                // --- FIM DA LÓGICA DE RATE LIMITING ---
-                
-                // Drop o lock antes de prosseguir para não segurá-lo desnecessariamente
-                drop(limiter);
-
-                // Configuração do Keep-Alive (código anterior)
-                let socket_ref = SockRef::from(&socket);
-                let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(60));
+                // Lógica de Keep-Alive reintegrada aqui, dentro do worker.
+                let socket_ref = socket2::SockRef::from(&socket);
+                let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(TCP_KEEPALIVE_SECS));
                 if let Err(e) = socket_ref.set_tcp_keepalive(&keepalive) {
-                    eprintln!("[{}] Erro ao configurar Keep-Alive: {}", addr, e);
+                    eprintln!("[Worker {}] Erro ao configurar Keep-Alive para {}: {}", worker_id, addr, e);
                 }
-                
-                println!("Nova conexão de: {}", addr);
+
+                println!("[Worker {}] Nova conexão de: {}", worker_id, addr);
                 let connections_clone = Arc::clone(&connections);
-                let counter_clone = Arc::clone(&connection_id_counter);
-                let _rate_limiter_clone = Arc::clone(&rate_limiter);
+                let counter_clone = Arc::clone(&id_counter);
 
                 tokio::spawn(async move {
                     handle_connection(socket, addr, connections_clone, counter_clone).await;
                 });
             }
             Err(e) => {
-                eprintln!("Erro ao aceitar conexão: {}", e);
+                eprintln!("[Worker {}] Erro ao aceitar conexão: {}", worker_id, e);
             }
         }
     }
 }
-// ... (a função handle_connection continua a mesma) ...
+
+fn create_reusable_port_listener(addr: SocketAddr) -> Result<TcpListener, Box<dyn Error>> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    let std_listener: std::net::TcpListener = socket.into();
+    std_listener.set_nonblocking(true)?;
+    let tokio_listener = TcpListener::from_std(std_listener)?;
+    Ok(tokio_listener)
+}
+
+// A função handle_connection completa, igual à da Issue #008
+
 async fn handle_connection(
-    _socket: TcpStream,
-    _addr: SocketAddr,
-    _connections: ConnectionMap,
-    _id_counter: Arc<AtomicUsize>,
-) { 
-    // ...
+    mut socket: TcpStream,
+    addr: SocketAddr,
+    connections: ConnectionMap,
+    id_counter: Arc<AtomicUsize>,
+) {
+    let conn_id = id_counter.fetch_add(1, Ordering::SeqCst);
+    let new_connection = Connection { addr, state: ConnectionState::Active };
+    connections.lock().unwrap().insert(conn_id, new_connection);
+
+    // NÃO vamos ler nada do socket.
+    // Em vez disso, vamos escrever uma resposta imediatamente.
+    if let Err(e) = socket.write_all(b"hello from space_server\n").await {
+        eprintln!("[Conn {}] Erro ao escrever 'hello': {}", conn_id, e);
+    }
+    
+    // E então fechamos a conexão imediatamente.
+    if let Err(e) = socket.shutdown().await {
+        eprintln!("[Conn {}] Erro no shutdown: {}", conn_id, e);
+    }
+
+    connections.lock().unwrap().remove(&conn_id);
 }
