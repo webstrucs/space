@@ -1,6 +1,7 @@
-// Conteúdo final, completo e funcional para: rs_core/src/network/mod.rs
+// --- Bloco de Importações (use statements) ---
 
-use crate::config::Config; // Importa a struct de configuração
+use crate::config::Config;
+use crate::ipc::protocol::LowLevelMessage;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -12,28 +13,27 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio_rustls::rustls::{
+    //self,
     pki_types::{CertificateDer, PrivateKeyDer},
     ServerConfig,
 };
 use rustls_pemfile::{certs, private_key};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UnixStream}; // UnixStream foi adicionado
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tracing::{error, info, instrument, warn};
 use metrics::{counter, gauge};
 
+
 // --- Módulo Principal e Estruturas de Dados ---
 type ConnectionMap = Arc<std::sync::Mutex<HashMap<usize, Connection>>>;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionState { Active, ShuttingDown }
-
 #[derive(Debug, Clone)]
 pub struct Connection { pub addr: SocketAddr, pub state: ConnectionState }
 
 
 // --- Funções Auxiliares ---
-
 fn load_certs_and_key(
     cert_path: &str,
     key_path: &str,
@@ -59,7 +59,6 @@ fn create_reusable_port_listener(addr: SocketAddr) -> Result<TcpListener, Box<dy
 
 
 // --- Lógica Principal do Servidor e dos Workers ---
-
 pub async fn run_server(config: Config) -> Result<(), Box<dyn Error>> {
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let num_workers = config.workers;
@@ -140,29 +139,47 @@ async fn handle_connection(
     connections: ConnectionMap,
     id_counter: Arc<AtomicUsize>,
 ) {
-    let conn_id = id_counter.fetch_add(1, Ordering::SeqCst);
+    let conn_id = id_counter.fetch_add(1, Ordering::SeqCst) as u64;
     let new_connection = Connection { addr, state: ConnectionState::Active };
     
     counter!("connections_total").increment(1);
     gauge!("connections_active").increment(1.0);
     info!(conn_id, "Conexão TLS estabelecida");
     
-    connections.lock().unwrap().insert(conn_id, new_connection);
+    connections.lock().unwrap().insert(conn_id as usize, new_connection);
 
     let mut buffer = [0; 1024];
     
     match tls_stream.read(&mut buffer).await {
         Ok(n) if n > 0 => {
-            let request_str = String::from_utf8_lossy(&buffer[..n]);
-            if let Some(request_line) = request_str.lines().next() {
-                info!(conn_id, request_line, "Requisição HTTP recebida.");
-                counter!("http_requests_total").increment(1);
+            let request_data = buffer[..n].to_vec();
+            info!(conn_id, bytes_read = n, "Requisição recebida do cliente.");
+
+            // --- INÍCIO DA LÓGICA IPC (Issue #016) ---
+            let message = LowLevelMessage::Data {
+                conn_id,
+                data: request_data,
+            };
+            let serialized_message = bincode::serialize(&message).unwrap();
+            const IPC_SOCKET_PATH: &str = "/tmp/space_server.sock";
+
+            match UnixStream::connect(IPC_SOCKET_PATH).await {
+                Ok(mut ipc_stream) => {
+                    if let Err(e) = ipc_stream.write_all(&serialized_message).await {
+                        warn!(conn_id, error = %e, "Falha ao enviar dados para a camada Python via IPC.");
+                    } else {
+                        info!(conn_id, bytes_sent = serialized_message.len(), "Dados enviados para a camada Python via IPC.");
+                    }
+                }
+                Err(e) => {
+                     warn!(conn_id, error = %e, "Falha ao conectar com a camada Python via IPC.");
+                }
             }
-            let response = "HTTP/1.1 200 OK\r\nContent-Length: 28\r\n\r\nhello from secure space_server\n";
-            if let Err(e) = tls_stream.write_all(response.as_bytes()).await {
+            // --- FIM DA LÓGICA IPC ---
+            
+            let response = b"HTTP/1.1 200 OK\r\n\r\nIPC message sent\n";
+            if let Err(e) = tls_stream.write_all(response).await {
                 warn!(conn_id, error = %e, "Erro ao escrever resposta HTTP");
-            } else {
-                counter!("bytes_written_total").increment(response.len() as u64);
             }
         }
         Ok(_) => { 
@@ -177,7 +194,7 @@ async fn handle_connection(
         warn!(conn_id, error = %e, "Erro no shutdown do socket");
     }
 
-    connections.lock().unwrap().remove(&conn_id);
+    connections.lock().unwrap().remove(&(conn_id as usize));
     gauge!("connections_active").decrement(1.0);
     info!(conn_id, "Conexão encerrada");
 }
