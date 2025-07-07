@@ -1,4 +1,6 @@
-// --- Bloco de Importações (use statements) ---
+// Conteúdo final, completo e funcional para: rs_core/src/network/mod.rs
+
+use crate::config::Config; // Importa a struct de configuração
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -9,28 +11,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use socket2::{Domain, Protocol, Socket, Type};
+use tokio_rustls::rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer},
+    ServerConfig,
+};
 use rustls_pemfile::{certs, private_key};
-
-// Importações de Tokio e Rustls, usando os tipos re-exportados para compatibilidade
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{
-    rustls::{
-        pki_types::{CertificateDer, PrivateKeyDer},
-        ServerConfig,
-    },
-    server::TlsStream,
-    TlsAcceptor,
-};
-
-// Importações de Observabilidade
+use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tracing::{error, info, instrument, warn};
 use metrics::{counter, gauge};
 
-
 // --- Módulo Principal e Estruturas de Dados ---
-
-// Definições de tipo e estado no topo do módulo para serem visíveis por todas as funções.
 type ConnectionMap = Arc<std::sync::Mutex<HashMap<usize, Connection>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,7 +34,6 @@ pub struct Connection { pub addr: SocketAddr, pub state: ConnectionState }
 
 // --- Funções Auxiliares ---
 
-/// Carrega o certificado e a chave privada do disco.
 fn load_certs_and_key(
     cert_path: &str,
     key_path: &str,
@@ -54,7 +45,6 @@ fn load_certs_and_key(
     Ok((certs, key))
 }
 
-/// Cria um TcpListener com a opção SO_REUSEPORT ativada.
 fn create_reusable_port_listener(addr: SocketAddr) -> Result<TcpListener, Box<dyn Error>> {
     let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
     #[cfg(unix)]
@@ -70,20 +60,18 @@ fn create_reusable_port_listener(addr: SocketAddr) -> Result<TcpListener, Box<dy
 
 // --- Lógica Principal do Servidor e dos Workers ---
 
-/// A função principal que gerencia e inicia os workers.
-pub async fn run_server() -> Result<(), Box<dyn Error>> {
-    let addr: SocketAddr = "127.0.0.1:8080".parse()?;
-    let num_workers = num_cpus::get();
+pub async fn run_server(config: Config) -> Result<(), Box<dyn Error>> {
+    let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
+    let num_workers = config.workers;
     info!(workers = num_workers, "Iniciando o servidor Space...");
 
-    let (certs, key) = load_certs_and_key("certs/cert.pem", "certs/key.pem")?;
+    let (certs, key) = load_certs_and_key(&config.cert_path, &config.key_path)?;
     
-    // Constrói a configuração TLS usando a API correta.
-    let config = ServerConfig::builder()
+    let server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
 
-    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let acceptor = TlsAcceptor::from(Arc::new(server_config));
     
     let connection_id_counter = Arc::new(AtomicUsize::new(0));
     let connections: ConnectionMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -111,7 +99,6 @@ pub async fn run_server() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// A lógica de um único worker, que aceita conexões TCP e inicia o handshake TLS.
 async fn run_worker(
     worker_id: usize,
     listener: TcpListener,
@@ -146,7 +133,6 @@ async fn run_worker(
     }
 }
 
-/// A lógica que gerencia uma única conexão TLS, agora com parsing HTTP básico.
 #[instrument(skip(tls_stream, connections, id_counter), fields(addr = %addr))]
 async fn handle_connection(
     mut tls_stream: TlsStream<TcpStream>,

@@ -18,6 +18,8 @@ axum = "0.7"
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.25"
 rustls-pemfile = "2.1"
+envy = "0.4"
+serde = { version = "1.0", features = ["derive"] }
 
 # Adicione este bloco inteiro no final do seu Cargo.toml
 [profile.release]
