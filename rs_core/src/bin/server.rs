@@ -33,7 +33,10 @@ async fn main() {
     tokio::spawn(start_metrics_server(handle));
 
     // 4. Inicia o servidor principal
+    // DEPOIS
     if let Err(e) = rs_core::network::run_server().await {
-        tracing::error!(error = %e, "Erro fatal no servidor");
+        tracing::error!(error = %e, "Erro fatal no servidor principal. Desligando.");
+        // Adiciona a linha abaixo para encerrar o programa com um código de erro.
+        std::process::exit(1);
     }
 }
