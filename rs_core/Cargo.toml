@@ -14,7 +14,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 metrics = "0.22"
 metrics-exporter-prometheus = "0.13"
-axum = "0.7" # Um web framework simples para expor as métricas
+axum = "0.7"
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.25"
+rustls-pemfile = "2.1"
 
 # Adicione este bloco inteiro no final do seu Cargo.toml
 [profile.release]
