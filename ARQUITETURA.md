@@ -42,6 +42,7 @@ graph LR;
     R_NET -- Resposta TCP/UDP --> C;
 ```
 
+
 ## 2. Responsabilidades das Camadas
 
 ### Camada de Baixo Nível (escrita em Rust)
@@ -63,6 +64,7 @@ Esta camada é o "cérebro" do servidor. Ela lida com a lógica de negócios da 
 - **Processamento de Conteúdo:** Serve arquivos estáticos, gera páginas dinâmicas, processa formulários e interage com bancos de dados (`sqlite3` nativo) ou outros serviços.
 - **Gerenciamento de Sessão e Autenticação:** Lida com cookies, sessões e validação de credenciais (ex: JWT usando `hashlib` e `hmac`).
 - **Interface de Comunicação (IPC):** Atua como o "cliente" na comunicação inter-camadas, recebendo requisições da camada Rust, processando-as e enviando as respostas de volta.
+
 
 ## 3. Comunicação Inter-Camadas (IPC - Inter-Process Communication)
 
@@ -92,3 +94,31 @@ Esta seção documenta as estratégias usadas na camada de baixo nível para gar
 ### Gerenciamento de Descritores de Arquivo
 - **Timeouts e Keep-Alive:** O servidor implementa timeouts de inatividade no nível da aplicação e configura o TCP Keep-Alive no nível do SO. Ambos os mecanismos garantem que conexões "zumbis" ou inativas sejam encerradas, liberando seus respectivos descritores de arquivo e prevenindo o esgotamento deste recurso.
 - **Graceful Shutdown:** Ao receber um sinal de interrupção (`Ctrl+C`), o servidor para de aceitar novas conexões, permite que as existentes terminem seu trabalho e encerra todos os recursos de forma limpa.
+
+
+## Camada de Alto Nível (Python): Restrição de Dependências
+
+Uma das diretrizes de arquitetura mais importantes para a camada de alto nível em Python é a **restrição ao uso exclusivo de módulos da Biblioteca Padrão do Python em ambientes de produção**.
+
+### A Regra
+
+Para o ambiente de produção, a camada de alto nível em Python deve utilizar **exclusivamente** os módulos que fazem parte da Biblioteca Padrão do Python 3.11. Nenhuma dependência externa (instalada via `pip` do PyPI, como `requests`, `FastAPI`, `pandas`, etc.) é permitida no deploy de produção.
+
+### Justificativa
+
+Esta decisão radical é baseada em quatro pilares fundamentais:
+
+1.  **Segurança Máxima:** Reduz a superfície de ataque a zero no que tange a dependências. Elimina completamente o risco de *supply chain attacks*, onde pacotes de terceiros podem ser comprometidos.
+2.  **Confiabilidade e Estabilidade:** Evita a instabilidade introduzida por bugs, *breaking changes*, ou o abandono de bibliotecas de terceiros. A Biblioteca Padrão é robusta, estável e mantida junto com a linguagem.
+3.  **Performance Controlada:** Garante que não haja sobrecarga de performance (overhead) de bibliotecas externas potencialmente mal otimizadas ou "inchadas". O controle sobre todo o código executado é total.
+4.  **Simplicidade de Deploy:** O ambiente de produção se torna minimalista. Não há necessidade de gerenciar `requirements.txt` ou executar `pip install`. O container ou servidor de produção precisa apenas do runtime do Python 3.11, nada mais.
+
+### Implicações Práticas
+
+-   **Deserialização:** Como não podemos usar pacotes como `py-bincode`, a desserialização das mensagens enviadas pelo Rust será implementada em Python puro, lendo os bytes de acordo com a especificação do formato `bincode`.
+-   **Frameworks Web:** Não utilizaremos frameworks como `FastAPI` ou `Flask`. A lógica de manipulação de requisições será construída sobre os módulos nativos `asyncio` e, possivelmente, `http.server`, ou através do parse manual dos bytes da requisição HTTP.
+-   **Outras Funcionalidades:** Qualquer funcionalidade (ex: acesso a banco de dados) deve ser implementada usando os módulos nativos correspondentes (`sqlite3`, `socket`, etc.) ou através da comunicação com outros microsserviços.
+
+### Exceções
+
+Ferramentas de **desenvolvimento**, como `pytest` para testes, `black` para formatação de código, e `ruff` para linting, são permitidas e incentivadas no ambiente de desenvolvimento, mas **não devem** fazer parte do build de produção.
