@@ -141,9 +141,7 @@ async fn handle_connection(
     tracing::Span::current().record("addr", &tracing::field::display(addr));
 
     info!("Conexão TLS estabelecida");
-    let new_connection = Connection { addr, state: ConnectionState::Active };
-    connections.lock().unwrap().insert(conn_id as usize, new_connection);
-    
+    connections.lock().unwrap().insert(conn_id as usize, Connection { addr, state: ConnectionState::Active });
     counter!("connections_total").increment(1);
     gauge!("connections_active").increment(1.0);
     
@@ -151,31 +149,51 @@ async fn handle_connection(
     
     if let Ok(n) = tls_stream.read(&mut buffer).await {
         if n > 0 {
-             let request_data = buffer[..n].to_vec();
-            info!(bytes_read = n, "Requisição recebida do cliente.");
+            let request_data = buffer[..n].to_vec();
+            info!(bytes_read = n, "Requisição recebida, enviando para a camada Python...");
 
             let message = LowLevelMessage::Data { conn_id, data: request_data };
             if let Ok(serialized_message) = bincode::serialize(&message) {
                 const IPC_SOCKET_PATH: &str = "/tmp/space_server.sock";
                 if let Ok(mut ipc_stream) = UnixStream::connect(IPC_SOCKET_PATH).await {
-                    if let Err(e) = ipc_stream.write_all(&serialized_message).await {
-                        warn!(error = %e, "Falha ao enviar dados via IPC.");
-                    } else {
-                        info!(bytes_sent = serialized_message.len(), "Dados enviados via IPC.");
+                    
+                    // --- CORREÇÃO: LÓGICA DE ESCRITA COM PREFIXO DE TAMANHO ---
+                    let msg_len = serialized_message.len() as u64;
+                    // 1. Envia o tamanho da mensagem (8 bytes) primeiro
+                    if ipc_stream.write_all(&msg_len.to_le_bytes()).await.is_ok() {
+                        // 2. Envia a mensagem serializada
+                        if ipc_stream.write_all(&serialized_message).await.is_ok() {
+                            info!(bytes_sent = msg_len, "Dados enviados via IPC.");
+
+                            // --- CORREÇÃO: LÓGICA DE LEITURA COM PREFIXO DE TAMANHO ---
+                            let mut len_buf = [0u8; 8];
+                            // 3. Lê os 8 bytes da resposta para saber o tamanho
+                            if ipc_stream.read_exact(&mut len_buf).await.is_ok() {
+                                let response_len = u64::from_le_bytes(len_buf);
+                                let mut ipc_response_buf = vec![0u8; response_len as usize];
+                                // 4. Lê exatamente o tamanho da resposta
+                                if ipc_stream.read_exact(&mut ipc_response_buf).await.is_ok() {
+                                    info!(bytes_received = response_len, "Resposta recebida da camada Python.");
+                                    // No futuro, aqui desserializamos e usamos a resposta.
+                                }
+                            }
+                        }
                     }
+                } else {
+                     warn!("Falha ao conectar com a camada Python via IPC.");
                 }
             }
-            let response = b"HTTP/1.1 200 OK\r\n\r\nIPC message sent\n";
-            if let Err(e) = tls_stream.write_all(response).await {
-                warn!(error = %e, "Erro ao escrever resposta HTTP");
+            
+            let response = b"HTTP/1.1 200 OK\r\n\r\nIPC cycle complete\n";
+            if tls_stream.write_all(response).await.is_err() {
+                warn!("Erro ao escrever resposta HTTP");
             }
         }
     }
 
-    if let Err(e) = tls_stream.shutdown().await {
-        warn!(error = %e, "Erro no shutdown do socket");
+    if tls_stream.shutdown().await.is_err() {
+        warn!("Erro no shutdown do socket");
     }
-
     connections.lock().unwrap().remove(&(conn_id as usize));
     gauge!("connections_active").decrement(1.0);
     info!("Conexão encerrada");
