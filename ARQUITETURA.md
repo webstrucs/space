@@ -122,3 +122,11 @@ Esta decisão radical é baseada em quatro pilares fundamentais:
 ### Exceções
 
 Ferramentas de **desenvolvimento**, como `pytest` para testes, `black` para formatação de código, e `ruff` para linting, são permitidas e incentivadas no ambiente de desenvolvimento, mas **não devem** fazer parte do build de produção.
+
+### Tratamento de Protocolos Avançados (HTTP/2, HTTP/3)
+
+A estratégia para lidar com diferentes versões do protocolo HTTP é dividida entre as camadas:
+
+-   **HTTP/1.x:** Este protocolo é baseado em texto e relativamente simples. Toda a lógica de parsing (análise de request-line, cabeçalhos e corpo) é de responsabilidade da **camada de alto nível (Python)**, que oferece flexibilidade para isso. A camada Rust atua como um simples proxy, encaminhando os bytes da conexão TLS.
+
+-   **HTTP/2 e HTTP/3 (QUIC):** Estes são protocolos binários, multiplexados e muito mais complexos. Lidar com o "framing", streams e controle de fluxo em Python puro seria ineficiente e complexo. Portanto, a responsabilidade de lidar com a complexidade destes protocolos será da **camada de baixo nível (Rust)**. O núcleo Rust irá decodificar os frames de H2/H3 e enviará mensagens simplificadas e estruturadas (similares a uma requisição HTTP simples) para a camada Python via IPC. A camada Python permanecerá focada na lógica de negócios, independente da complexidade do protocolo de transporte.
