@@ -1,9 +1,6 @@
-// Conteúdo para: rs_core/src/ipc/protocol.rs
+// Conteúdo completo para: rs_core/src/ipc/protocol.rs
 
 use serde::{Deserialize, Serialize};
-
-// Usamos enums para definir um "protocolo" de mensagens.
-// O #[derive(...)] gera o código para serializar/desserializar automaticamente.
 
 /// Mensagens enviadas do núcleo Rust (baixo nível) para a lógica Python (alto nível).
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -11,11 +8,13 @@ pub enum LowLevelMessage {
     /// Notifica que uma nova conexão foi estabelecida.
     NewConnection {
         conn_id: u64,
-        remote_addr: String, // Usamos String para simplicidade na serialização entre linguagens.
+        remote_addr: String,
     },
     /// Envia os dados brutos de uma requisição para serem processados.
     Data {
         conn_id: u64,
+        // CORREÇÃO: Adicionamos o endereço do cliente a esta mensagem.
+        remote_addr: String,
         data: Vec<u8>,
     },
     /// Informa que o cliente fechou a conexão.
