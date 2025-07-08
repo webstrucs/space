@@ -3,12 +3,23 @@
 # Ignorar diretórios de build do Rust
 **/target/
 
+# Byte-code compilado
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # Ignorar arquivos de configuração de IDEs comuns (opcional, mas recomendado)
 .vscode/
 .idea/
 
 # Ignorar arquivos de sistema do macOS (opcional)
 .DS_Store
+
+# Ambientes Virtuais
+venv/
+wse/
+.venv/
 
 # Arquivos de dados de profiling e output
 perf.data
