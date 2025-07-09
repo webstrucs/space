@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::error::{AppError, Result};
 use crate::ipc::protocol::LowLevelMessage;
+use crate::ipc::protocol::HighLevelMessage;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -153,14 +154,13 @@ async fn handle_connection(
     tracing::Span::current().record("addr", &tracing::field::display(addr));
 
     info!("Conexão TLS estabelecida");
-    let new_connection = Connection { addr, state: ConnectionState::Active };
-    connections.lock().unwrap().insert(conn_id as usize, new_connection);
-    
+    connections.lock().unwrap().insert(conn_id as usize, Connection { addr, state: ConnectionState::Active });
     counter!("connections_total").increment(1);
     gauge!("connections_active").increment(1.0);
     
     let mut buffer = [0; 1024];
-    
+    let mut final_response = Vec::new(); // Inicia o buffer de resposta final vazio
+
     if let Ok(n) = tls_stream.read(&mut buffer).await {
         if n > 0 {
             let request_data = buffer[..n].to_vec();
@@ -176,15 +176,26 @@ async fn handle_connection(
                 const IPC_SOCKET_PATH: &str = "/tmp/space_server.sock";
                 if let Ok(mut ipc_stream) = UnixStream::connect(IPC_SOCKET_PATH).await {
                     let msg_len = serialized_message.len() as u64;
-                    if ipc_stream.write_all(&msg_len.to_le_bytes()).await.is_ok() {
-                        if ipc_stream.write_all(&serialized_message).await.is_ok() {
-                            info!(bytes_sent = msg_len, "Dados enviados via IPC.");
-                            let mut len_buf = [0u8; 8];
-                            if ipc_stream.read_exact(&mut len_buf).await.is_ok() {
-                                let response_len = u64::from_le_bytes(len_buf);
-                                let mut ipc_response_buf = vec![0u8; response_len as usize];
-                                if ipc_stream.read_exact(&mut ipc_response_buf).await.is_ok() {
-                                    info!(bytes_received = response_len, "Resposta recebida da camada Python.");
+                    if ipc_stream.write_all(&msg_len.to_le_bytes()).await.is_ok() && ipc_stream.write_all(&serialized_message).await.is_ok() {
+                        info!(bytes_sent = msg_len, "Dados enviados via IPC.");
+                        
+                        let mut len_buf = [0u8; 8];
+                        if ipc_stream.read_exact(&mut len_buf).await.is_ok() {
+                            let response_len = u64::from_le_bytes(len_buf);
+                            let mut ipc_response_buf = vec![0u8; response_len as usize];
+                            if ipc_stream.read_exact(&mut ipc_response_buf).await.is_ok() {
+                                
+                                // --- CORREÇÃO DEFINITIVA: Abrir o "envelope" ---
+                                // 1. Desserializa a mensagem completa vinda do Python.
+                                match bincode::deserialize::<HighLevelMessage>(&ipc_response_buf) {
+                                    Ok(response_message) => {
+                                        // 2. Pega apenas o campo 'data' (a "carta") de dentro.
+                                        if let HighLevelMessage::ResponseData { data, .. } = response_message {
+                                            info!(bytes_received = data.len(), "Resposta HTTP extraída da mensagem IPC.");
+                                            final_response = data; // Sucesso! Esta é a resposta HTTP real.
+                                        }
+                                    },
+                                    Err(e) => warn!(error = %e, "Falha ao desserializar resposta do Python."),
                                 }
                             }
                         }
@@ -193,12 +204,19 @@ async fn handle_connection(
                      warn!("Falha ao conectar com a camada Python via IPC.");
                 }
             }
-            
-            let response = b"HTTP/1.1 200 OK\r\n\r\nIPC cycle complete\n";
-            if let Err(e) = tls_stream.write_all(response).await {
-                warn!(error = %e, "Erro ao escrever resposta HTTP");
-            }
         }
+    }
+    
+    // Se, após todo o processo, a resposta final ainda estiver vazia, envia erro 500.
+    let response_to_send = if !final_response.is_empty() {
+        final_response
+    } else {
+        warn!("Nenhuma resposta do Python processada, enviando erro 500.");
+        b"HTTP/1.1 500 Internal Server Error\r\n\r\nError processing request".to_vec()
+    };
+    
+    if let Err(e) = tls_stream.write_all(&response_to_send).await {
+        warn!(error = %e, "Erro ao escrever resposta HTTP para o cliente");
     }
 
     if let Err(e) = tls_stream.shutdown().await {
