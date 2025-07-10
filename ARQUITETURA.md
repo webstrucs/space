@@ -130,3 +130,20 @@ A estratégia para lidar com diferentes versões do protocolo HTTP é dividida e
 -   **HTTP/1.x:** Este protocolo é baseado em texto e relativamente simples. Toda a lógica de parsing (análise de request-line, cabeçalhos e corpo) é de responsabilidade da **camada de alto nível (Python)**, que oferece flexibilidade para isso. A camada Rust atua como um simples proxy, encaminhando os bytes da conexão TLS.
 
 -   **HTTP/2 e HTTP/3 (QUIC):** Estes são protocolos binários, multiplexados e muito mais complexos. Lidar com o "framing", streams e controle de fluxo em Python puro seria ineficiente e complexo. Portanto, a responsabilidade de lidar com a complexidade destes protocolos será da **camada de baixo nível (Rust)**. O núcleo Rust irá decodificar os frames de H2/H3 e enviará mensagens simplificadas e estruturadas (similares a uma requisição HTTP simples) para a camada Python via IPC. A camada Python permanecerá focada na lógica de negócios, independente da complexidade do protocolo de transporte.
+
+## Interface de Gateway de Aplicação (SGI)
+
+Para permitir a extensibilidade, o Servidor Space define uma interface de gateway interna, inspirada no ASGI. Qualquer aplicação ou adaptador compatível deve ser um objeto "chamável" (callable) que segue a seguinte especificação assíncrona:
+
+`async def application(scope: dict, receive: callable, send: callable) -> None:`
+
+Onde:
+-   **`scope` (dict):** Um dicionário contendo informações da requisição, como:
+    -   `type` (str): O tipo de evento (ex: 'http').
+    -   `method` (str): O método HTTP (ex: 'GET').
+    -   `path` (str): O caminho da URL.
+    -   `headers` (dict): Um dicionário com os cabeçalhos da requisição.
+-   **`receive` (awaitable):** Uma função assíncrona que, quando aguardada (`await receive()`), retorna o corpo da requisição em bytes.
+-   **`send` (awaitable):** Uma função assíncrona que a aplicação usa para enviar a resposta de volta para o servidor em partes (ex: `await send({'type': 'http.response.start', 'status': 200, ...})`, `await send({'type': 'http.response.body', 'body': b'...' })`).
+
+Esta interface é a base para a integração com frameworks customizados e para os adaptadores WSGI/ASGI.
