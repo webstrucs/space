@@ -5,7 +5,10 @@ from handlers import route_handlers
 
 # Prioridade de rotas: API > Static > Root (o mais específico primeiro)
 ROUTE_RULES = [
+    # NOVA ROTA DE LOGIN ABAIXO:
+    (re.compile(r"^/login$"), route_handlers.handle_login_request),
     (re.compile(r"^/api/.*$"), route_handlers.handle_api_request),
+    (re.compile(r"^/profile$"), route_handlers.handle_profile_page),
     (re.compile(r"^/static/.*$"), route_handlers.handle_static_request),
     (re.compile(r"^/$"), route_handlers.handle_root_request),
 ]
