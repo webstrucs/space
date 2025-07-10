@@ -1,5 +1,3 @@
-# Conteúdo para: py_core/src/utils/http_response.py
-
 from http import HTTPStatus
 from typing import Dict, Optional, List
 
@@ -9,17 +7,12 @@ def build_response(
     set_cookies: Optional[List[str]] = None,
     body: bytes = b''
 ) -> bytes:
-    """
-    Constrói uma resposta HTTP/1.1 completa como um array de bytes.
-    """
     try:
         status = HTTPStatus(status_code)
         status_line = f"HTTP/1.1 {status.value} {status.phrase}\r\n"
     except ValueError:
-        # Fallback para códigos de status desconhecidos
         status_line = f"HTTP/1.1 {status_code}\r\n"
 
-    # Prepara os cabeçalhos
     response_headers = headers or {}
     response_headers['Content-Length'] = str(len(body))
     if 'Content-Type' not in response_headers:
@@ -27,12 +20,10 @@ def build_response(
     
     headers_str = "".join([f"{k}: {v}\r\n" for k, v in response_headers.items()])
     
-    # Adiciona os cabeçalhos Set-Cookie
     if set_cookies:
         for cookie_str in set_cookies:
             headers_str += f"Set-Cookie: {cookie_str}\r\n"
 
-    # Junta tudo
     return status_line.encode('iso-8859-1') + \
            headers_str.encode('iso-8859-1') + \
            b"\r\n" + \
