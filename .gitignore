@@ -18,7 +18,6 @@ __pycache__/
 
 # Ambientes Virtuais
 venv/
-wse/
 .venv/
 
 # Arquivos de dados de profiling e output
