@@ -26,3 +26,53 @@ Este documento descreve as medidas de segurança implementadas na camada de baix
 ## Isolamento de Processos
 
 - **Diretriz:** Para ambientes de produção, recomenda-se que o processo do servidor seja executado com o menor privilégio de usuário possível. O uso de técnicas de sandboxing como `chroot` ou contêineres (Docker) é fortemente encorajado para limitar o acesso do processo ao sistema de arquivos e outros recursos do sistema.
+
+---
+
+# Política de Segurança do Servidor Space
+
+Este documento descreve as políticas e implementações de segurança adotadas no projeto Space. A nossa filosofia é a de **defesa em profundidade**, aplicando medidas de segurança em todas as camadas da arquitetura.
+
+## 1. Nível de Sistema Operacional e Rede
+
+A primeira barreira de defesa é a configuração correta do ambiente do servidor.
+
+#### **1.1. Firewall (NFTables)**
+A política de firewall é de **negar por padrão (`policy drop`)**. Apenas o tráfego para portas explicitamente permitidas é aceito:
+-   **Portas Permitidas:** `22` (SSH), `8080` (Servidor Space), `9090` (Métricas).
+-   **Regras Adicionais:** Permite tráfego local (`loopback`) e o retorno de conexões já estabelecidas.
+-   **Mitigação de DoS:** Novas conexões para serviços críticos são limitadas a uma taxa de `5/minuto` por IP de origem.
+
+#### **1.2. Acesso Administrativo (SSH)**
+O acesso ao servidor é restrito:
+-   **Autenticação:** Exclusivamente por chaves SSH.
+-   **Login por Senha e `root`:** Desabilitados.
+
+## 2. Nível de Transporte
+
+#### **2.1. Criptografia Fim-a-Fim (TLS)**
+Toda a comunicação entre clientes e o servidor é obrigatoriamente criptografada utilizando **TLS**, implementado através da biblioteca `rustls`.
+
+## 3. Nível de Aplicação
+
+#### **3.1. Mitigação de Abuso e DoS**
+-   **Rate Limiting de Conexões:** O núcleo Rust implementa um limitador de taxa para novas conexões, agindo como uma segunda camada de defesa.
+-   **Timeouts e Keep-Alive:** Conexões ociosas ou "zumbis" são encerradas para preservar recursos.
+
+#### **3.2. Segurança de Acesso e Memória**
+-   **Prevenção de Buffer Overflow:** Garantida pelo design da linguagem Rust.
+-   **Prevenção de Path Traversal:** A camada Rust inspeciona os bytes brutos em busca de sequências `..`. Como defesa em profundidade, o handler de arquivos em Python resolve o caminho canônico e valida que ele pertence ao diretório raiz permitido.
+
+#### **3.3. Segurança de Conteúdo e Sessão**
+-   **WAF (SQL Injection):** Um WAF em Python inspeciona os dados da requisição em busca de padrões de SQLi.
+-   **Cabeçalhos HTTP de Segurança:**
+    -   `Content-Security-Policy: default-src 'self'`: Previne XSS.
+    -   `X-Frame-Options: DENY`: Previne Clickjacking.
+    -   `X-Content-Type-Options: nosniff`: Previne ataques de MIME-sniffing.
+-   **Cookies Seguros:** Cookies de sessão são gerados com as flags `HttpOnly` e `SameSite=Lax` para proteger contra XSS e CSRF.
+-   **Autenticação JWT:** APIs são protegidas com JSON Web Tokens assinados via HMAC-SHA256 e com tempo de expiração.
+
+## 4. Nível de Banco de Dados
+-   **Prevenção de SQL Injection:** Uso obrigatório de **queries parametrizadas**.
+-   **Armazenamento de Senhas:** Senhas são armazenadas como **hashes criptográficos fortes** (SHA-256).
+-   **Menor Privilégio:** O usuário da aplicação no banco de dados possui apenas as permissões mínimas necessárias.
