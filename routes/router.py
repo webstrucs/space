@@ -1,25 +1,20 @@
-# Conteúdo para: py_core/src/routing/router.py
+# space/routes/router.py
 
 import re
 from handlers import route_handlers
 
-# Prioridade de rotas: API > Static > Root (o mais específico primeiro)
+# Agora todas as rotas apontam para instâncias de classes, de forma consistente.
 ROUTE_RULES = [
-    # NOVA ROTA DE LOGIN ABAIXO:
-    (re.compile(r"^/login$"), route_handlers.handle_login_request),
-    (re.compile(r"^/api/.*$"), route_handlers.handle_api_request),
-    (re.compile(r"^/profile$"), route_handlers.handle_profile_page),
-    (re.compile(r"^/static/.*$"), route_handlers.handle_static_request),
-    (re.compile(r"^/$"), route_handlers.handle_root_request),
+    (re.compile(r"^/login$"), route_handlers.LoginApplication()),
+    (re.compile(r"^/profile$"), route_handlers.ProfileApplication()),
+    (re.compile(r"^/api/.*$"), route_handlers.ApiApplication()),
+    (re.compile(r"^/static/.*$"), route_handlers.StaticFileApplication()),
+    (re.compile(r"^/$"), route_handlers.RootApplication()),
 ]
+NOT_FOUND_HANDLER = route_handlers.NotFoundApplication()
 
 def resolve_route(path: str):
-    """
-    Encontra o handler correto para um dado caminho (path).
-    """
-    for pattern, handler in ROUTE_RULES:
+    for pattern, handler_instance in ROUTE_RULES:
         if pattern.match(path):
-            return handler
-
-    # Se nenhuma regra específica for encontrada, trata-se de um 404
-    return route_handlers.handle_not_found
+            return handler_instance
+    return NOT_FOUND_HANDLER
