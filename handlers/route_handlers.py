@@ -1,110 +1,100 @@
-# Conteúdo final, completo e unificado para: py_core/src/handlers/route_handlers.py
+# Conteúdo final e 100% refatorado para: py_core/src/handlers/route_handlers.py
 
 import json
 import mimetypes
 from pathlib import Path
 from email.utils import formatdate
+from core.interfaces import Application
+from core.http_types import Request, Response
+from core.http_response import build_response
+from core import jwt_handler
+from core import user_db
+from core.templating import render
 
-# Importa nossos módulos
-from utils.http_response import build_response
-from security import jwt_handler
-from database import user_db
-from services.session_manager import SessionManager # Importa o SessionManager
-import secrets # Importa o secrets para o handle_login_request (caso de exemplo)
+class RootApplication(Application):
+    async def handle(self, request: Request) -> Response:
+        body = b"Use POST /login para autenticar ou GET /profile com um token."
+        return Response(status_code=200, body=body)
 
-# --- Handlers de Rotas Básicas ---
+class ApiApplication(Application):
+    async def handle(self, request: Request) -> Response:
+        body = f"Handler de API para o caminho: {request.path_only}".encode()
+        return Response(status_code=200, body=body)
 
-def handle_root_request(method, path, query, version, headers, body):
-    return build_response(200, body=b"Use POST /login para autenticar ou GET /profile com um token.")
+class NotFoundApplication(Application):
+    async def handle(self, request: Request) -> Response:
+        body = f"404 Not Found: {request.path_only}".encode()
+        return Response(status_code=404, body=body)
 
-def handle_api_request(method, path, query, version, headers, body):
-    return build_response(200, body=f"API endpoint: {path}".encode())
+class StaticFileApplication(Application):
+    async def handle(self, request: Request) -> Response:
+        """
+        Implementação completa e correta para servir arquivos estáticos,
+        agora dentro da nova arquitetura de classes.
+        """
+        try:
+            # Lógica robusta de caminho que já validamos
+            project_root = Path(__file__).parent.parent.resolve()
+            static_root = project_root.joinpath("works", "wse").resolve()
+            
+            relative_path = request.path_only.removeprefix("/static/").lstrip("/")
+            
+            if ".." in Path(relative_path).parts:
+                print(f"[SECURITY] Path Traversal bloqueado: {request.path_only}")
+                return Response(status_code=403, body=b"Forbidden")
+            
+            requested_path = static_root.joinpath(relative_path).resolve()
 
-def handle_not_found(method, path, query, version, headers, body):
-    return build_response(404, body=f"404 Not Found: {path}".encode())
+            if not requested_path.is_relative_to(static_root):
+                print(f"[SECURITY] Path Traversal bloqueado: {request.path_only}")
+                return Response(status_code=403, body=b"Forbidden")
 
-# --- Handler de Arquivo Estático (da Issue #024) ---
+            if requested_path.is_file():
+                # Lógica para ler e servir o arquivo
+                with open(requested_path, "rb") as f:
+                    file_body = f.read()
+                
+                mime_type, _ = mimetypes.guess_type(requested_path)
+                headers = {"Content-Type": mime_type or "application/octet-stream"}
+                headers["Last-Modified"] = formatdate(requested_path.stat().st_mtime, usegmt=True)
+                
+                return Response(status_code=200, headers=headers, body=file_body)
+            else:
+                # Se o arquivo não existe, chama o handler de 404
+                return await NotFoundApplication().handle(request)
 
-def handle_static_request(method: str, path: str, query, version, headers: dict, body: bytes) -> bytes:
-    try:
-        static_root = Path(__file__).parent.parent.joinpath("wse").resolve()
-        relative_path = path.removeprefix("/static/").lstrip("/")
-        requested_path = static_root.joinpath(relative_path).resolve()
+        except Exception as e:
+            print(f"[STATIC HANDLER] Erro: {e}")
+            return Response(status_code=500, body=b"Internal Server Error")
+
+class LoginApplication(Application):
+    async def handle(self, request: Request) -> Response:
+        if request.method.upper() != 'POST':
+            return Response(status_code=405, body=b"Method Not Allowed")
+        try:
+            credentials = json.loads(request.body)
+            user_data = user_db.get_user_for_login(credentials.get('username'), credentials.get('password'))
+            if user_data:
+                payload = {"sub": user_data['username'], "role": user_data['role']}
+                token = jwt_handler.create_token(payload)
+                response_body = json.dumps({"token": token}).encode('utf-8')
+                return Response(200, headers={"Content-Type": "application/json"}, body=response_body)
+            else:
+                return Response(401, body=b"Unauthorized: Invalid credentials")
+        except Exception:
+            return Response(400, body=b"Bad Request: Invalid JSON.")
+
+class ProfileApplication(Application):
+    async def handle(self, request: Request) -> Response:
+        auth_header = request.headers.get('authorization')
+        if not auth_header or not auth_header.lower().startswith('bearer '):
+            return Response(401, body=b"Unauthorized: Missing or malformed token.")
         
-        if not requested_path.is_relative_to(static_root):
-            return build_response(403, body=b"Forbidden")
+        token = auth_header[7:]
+        payload = jwt_handler.verify_and_decode_token(token)
+        if not payload:
+            return Response(401, body=b"Unauthorized: Invalid or expired token.")
         
-        if requested_path.is_file():
-            with open(requested_path, "rb") as f:
-                file_body = f.read()
-            mime_type, _ = mimetypes.guess_type(requested_path)
-            response_headers = {"Content-Type": mime_type or "application/octet-stream"}
-            response_headers["Last-Modified"] = formatdate(requested_path.stat().st_mtime, usegmt=True)
-            return build_response(200, headers=response_headers, body=file_body)
-        else:
-            return handle_not_found(method, path, query, version, headers, body)
-    except Exception as e:
-        print(f"[STATIC HANDLER] Erro: {e}")
-        return build_response(500, body=b"Internal Server Error")
-
-# --- Handlers de Conteúdo Dinâmico (da Issue #025) ---
-
-def handle_login_request(method, path, query, version, headers, body) -> bytes:
-    """Processa uma tentativa de login via POST com corpo JSON."""
-    if method.upper() != 'POST':
-        return build_response(405, body=b"Method Not Allowed")
-    
-    try:
-        credentials = json.loads(body)
-        username = credentials.get('username')
-        password = credentials.get('password')
-        
-        if not username or not password:
-            return build_response(400, body=b"Bad Request: Username and password are required.")
-
-        # Verifica as credenciais no banco de dados
-        user_data = user_db.get_user_for_login(username, password)
-        
-        if user_data:
-            # Se as credenciais estiverem corretas, cria o token JWT
-            payload = {"sub": user_data['username'], "role": user_data['role']}
-            token = jwt_handler.create_token(payload)
-            response_body = json.dumps({"token": token}).encode('utf-8')
-            return build_response(200, headers={"Content-Type": "application/json"}, body=response_body)
-        else:
-            return build_response(401, body=b"Unauthorized: Invalid credentials")
-
-    except json.JSONDecodeError:
-        return build_response(400, body=b"Bad Request: Invalid JSON.")
-    except Exception as e:
-        return build_response(500, body=f"Internal Server Error: {e}".encode())
-
-def handle_profile_page(method, path, query, version, headers, body) -> bytes:
-    """Serve a página de perfil, protegida por JWT."""
-    
-    # CORREÇÃO: Procura pelo cabeçalho 'authorization' em minúsculas.
-    # Nosso parser em http_handler.py já padroniza todas as chaves de cabeçalho para minúsculas.
-    auth_header = headers.get('authorization')
-    
-    if not auth_header or not auth_header.lower().startswith('bearer '):
-        return build_response(401, body=b"Unauthorized: Missing or malformed token.")
-        
-    # Pega o token, removendo 'Bearer ' (7 caracteres) do início da string.
-    token = auth_header[7:]
-    
-    # Verifica o token
-    payload = jwt_handler.verify_and_decode_token(token)
-    
-    if not payload:
-        return build_response(401, body=b"Unauthorized: Invalid or expired token.")
-        
-    # Se o token for válido, renderiza o template com os dados do payload
-    print(f"[AUTH] Acesso permitido para o usuario: {payload.get('sub')}")
-    context = {
-        "username": payload.get('sub', 'N/A'),
-        "access_level": payload.get('role', 'N/A')
-    }
-    from utils.templating import render # Importação movida para dentro para evitar dependência circular
-    html_body = render("profile.html", context)
-    
-    return build_response(200, headers={"Content-Type": "text/html; charset=utf-8"}, body=html_body)
+        context = {"username": payload.get('sub'), "access_level": payload.get('role')}
+        html_body = render("profile.html", context)
+        return Response(200, headers={"Content-Type": "text/html; charset=utf-8"}, body=html_body)
