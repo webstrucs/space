@@ -1,0 +1,8 @@
+# Conteúdo para: .dockerignore
+
+.git
+.gitignore
+**/target/
+**/__pycache__/
+*.db
+*.md
