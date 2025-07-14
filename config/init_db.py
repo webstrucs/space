@@ -1,14 +1,18 @@
-# Conteúdo final e corrigido para: py_core/src/database/init_db.py
+# space/config/init_db.py
 
+import sys
+from pathlib import Path
 import sqlite3
 import hashlib
-from pathlib import Path
 
-# Constrói o caminho para a raiz do projeto e depois para o arquivo do banco de dados
-DB_PATH = Path(__file__).parent.parent.parent.joinpath("space_database.db")
+# Adiciona a raiz do projeto ao path para encontrar o módulo 'core'
+project_root = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(project_root))
+
+from core.settings import DB_PATH
 
 def initialize():
-    # ... o resto da função continua igual ...
+    print(f"Inicializando banco de dados em: {DB_PATH}")
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     cur.execute("""
@@ -19,15 +23,15 @@ def initialize():
             role TEXT NOT NULL
         )
     """)
-    # Hash SHA256 para a senha 'password'
     admin_pass_hash = '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8'
-    cur.execute("""
-        INSERT OR IGNORE INTO users (username, password_hash, role)
-        VALUES ('admin', ?, 'admin')
-    """, (admin_pass_hash,))
+    try:
+        cur.execute("INSERT INTO users (username, password_hash, role) VALUES ('admin', ?, 'admin')", (admin_pass_hash,))
+        print("Usuário 'admin' inserido com sucesso.")
+    except sqlite3.IntegrityError:
+        print("Usuário 'admin' já existe.")
     con.commit()
     con.close()
-    print(f"Banco de dados '{DB_PATH}' inicializado com sucesso.")
+    print(f"Banco de dados '{DB_PATH}' inicializado e pronto.")
 
 if __name__ == "__main__":
     initialize()
