@@ -9,6 +9,7 @@ import asyncio
 import os
 import struct
 
+from core.logger_setup import setup_logging, logging
 from core.http_types import Request, Response
 from core.http_response import build_response
 from core.waf import inspect_request_data
@@ -62,7 +63,7 @@ async def handle_ipc_client(reader: asyncio.StreamReader, writer: asyncio.Stream
         await writer.drain()
 
     except Exception as e:
-        print(f"[PYTHON] Erro no handle_ipc_client: {e}")
+        logging.error(f"Erro no handle_ipc_client: {e}", exc_info=True)
     finally:
         if 'writer' in locals() and not writer.is_closing():
             writer.close()
@@ -70,13 +71,16 @@ async def handle_ipc_client(reader: asyncio.StreamReader, writer: asyncio.Stream
 
 
 async def main():
+
+    setup_logging()
+    
     if os.path.exists(IPC_SOCKET_PATH):
         try: os.remove(IPC_SOCKET_PATH)
         except OSError as e: print(f"Erro ao remover socket antigo: {e}"); return
             
     server = await asyncio.start_unix_server(handle_ipc_client, path=IPC_SOCKET_PATH)
     addr = server.sockets[0].getsockname() if server.sockets else IPC_SOCKET_PATH
-    print(f'[PYTHON] Servidor IPC ouvindo em: {addr}')
+    logging.info(f"Servidor IPC ouvindo em: {addr}")
     async with server:
         await server.serve_forever()
 
