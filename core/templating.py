@@ -1,21 +1,15 @@
-# Conteúdo para: py_core/src/utils/templating.py
+# space/core/templating.py
 
-from pathlib import Path
+from core.settings import WSD_ROOT_PATH
 
 def render(template_name: str, context: dict) -> bytes:
-    """
-    Renderiza um template HTML simples substituindo placeholders.
-    Exemplo de placeholder no HTML: {{ username }}
-    """
+    """Renderiza um template HTML simples substituindo placeholders."""
     try:
-        template_path = Path(__file__).parent.parent.parent.joinpath("wsd", template_name).resolve()
-
+        template_path = WSD_ROOT_PATH.joinpath(template_name)
         with open(template_path, 'r', encoding='utf-8') as f:
             content = f.read()
-
         for key, value in context.items():
             content = content.replace(f"{{{{ {key} }}}}", str(value))
-
         return content.encode('utf-8')
     except FileNotFoundError:
         return b"Erro 500: Template nao encontrado."

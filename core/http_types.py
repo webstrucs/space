@@ -1,14 +1,12 @@
-# Conteúdo para: core/http_types.py
+# space/core/http_types.py
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, List
+from typing import Dict, List, Any
 
 @dataclass
 class Request:
-    """Encapsula todos os dados de uma requisição HTTP recebida."""
     method: str
     path: str
-    path_only: str
     query_params: Dict[str, List[str]]
     version: str
     headers: Dict[str, str]
@@ -17,7 +15,6 @@ class Request:
 
 @dataclass
 class Response:
-    """Encapsula todos os dados de uma resposta HTTP a ser enviada."""
     status_code: int
     headers: Dict[str, str] = field(default_factory=dict)
     set_cookies: List[str] = field(default_factory=list)

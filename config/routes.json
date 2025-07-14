@@ -1,0 +1,32 @@
+[
+  {
+    "protocol": "http",
+    "path_regex": "^/login$",
+    "handler": "LoginApplication",
+    "methods": ["POST"]
+  },
+  {
+    "protocol": "http",
+    "path_regex": "^/profile$",
+    "handler": "ProfileApplication",
+    "methods": ["GET"]
+  },
+  {
+    "protocol": "http",
+    "path_regex": "^/api/.*$",
+    "handler": "ApiApplication",
+    "methods": ["GET", "POST", "PUT", "DELETE"]
+  },
+  {
+    "protocol": "http",
+    "path_regex": "^/static/.*$",
+    "handler": "StaticFileApplication",
+    "methods": ["GET"]
+  },
+  {
+    "protocol": "http",
+    "path_regex": "^/$",
+    "handler": "RootApplication",
+    "methods": ["GET"]
+  }
+]
