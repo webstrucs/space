@@ -34,7 +34,7 @@ echo "--- Iniciando a Instalação do Servidor Space (Branch: $GIT_BRANCH) ---"
 # --- Etapa 1: Atualização e Instalação de Dependências ---
 echo "--> [1/7] Atualizando o sistema e instalando dependências..."
 apt-get update && apt-get upgrade -y
-apt-get install -y git curl build-essential python3-venv nftables pkg-config libssl-dev
+apt-get install -y git curl build-essential python3-venv nftables pkg-config libssl-dev acl certbot
 
 # --- Etapa 2: Criação do Usuário e Estrutura de Diretórios ---
 echo "--> [2/7] Configurando usuário e diretórios de produção..."
