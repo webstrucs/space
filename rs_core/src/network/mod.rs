@@ -1,18 +1,15 @@
-// Conteúdo final e completo para: rs_core/src/network/mod.rs
+// Arquivo: rs_core/src/network/mod.rs - Versão com detecção dinâmica de privilégios
 
 use crate::config::Config;
 use crate::error::{AppError, Result};
 use crate::ipc::protocol::{HighLevelMessage, LowLevelMessage};
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::sync::broadcast;
 use tokio_rustls::rustls::{
-    // self,
     pki_types::{CertificateDer, PrivateKeyDer},
     ServerConfig,
 };
@@ -23,15 +20,22 @@ use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tracing::{error, info, instrument, warn};
 use metrics::{counter, gauge};
 
+// --- Estruturas de Dados e Tipos ---
 type ConnectionMap = Arc<std::sync::Mutex<HashMap<usize, Connection>>>;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionState { Active, ShuttingDown }
 #[derive(Debug, Clone)]
 pub struct Connection { pub addr: SocketAddr, pub state: ConnectionState }
 
-fn load_certs_and_key(cert_path: &str, key_path: &str) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-    let certs = certs(&mut std::io::BufReader::new(std::fs::File::open(cert_path)?)).collect::<std::result::Result<Vec<_>, _>>()?;
-    let key = private_key(&mut std::io::BufReader::new(std::fs::File::open(key_path)?))?.ok_or_else(|| AppError::CertLoad("Nenhuma chave privada encontrada no arquivo.".to_string()))?;
+// --- Funções Auxiliares ---
+fn load_certs_and_key(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let certs = certs(&mut std::io::BufReader::new(std::fs::File::open(cert_path)?))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let key = private_key(&mut std::io::BufReader::new(std::fs::File::open(key_path)?))?
+        .ok_or_else(|| AppError::CertLoad("Nenhuma chave privada encontrada no arquivo.".to_string()))?;
     Ok((certs, key))
 }
 
@@ -50,30 +54,63 @@ fn create_reusable_port_listener(addr: SocketAddr) -> Result<TcpListener> {
     Ok(tokio_listener)
 }
 
-pub async fn run_server(config: Config, shutdown_tx: broadcast::Sender<()>) -> Result<()> {
+// --- Lógica dos Servidores ---
+
+/// Inicia um servidor HTTP simples na porta 80, cuja única função é redirecionar para HTTPS.
+pub async fn run_http_redirect_server(mut shutdown_rx: broadcast::Receiver<()>) -> Result<()> {
+    let redirect_addr: SocketAddr = "[::]:80".parse()?;
+    let listener = create_reusable_port_listener(redirect_addr)?;
+    info!("Servidor de Redirecionamento HTTP ouvindo em http://[::]:80");
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.recv() => {
+                info!("Servidor de redirecionamento recebendo sinal de shutdown.");
+                break;
+            }
+            result = listener.accept() => {
+                if let Ok((mut stream, _)) = result {
+                    tokio::spawn(async move {
+                        let response = b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://webstrucs.com/\r\nServer: Space\r\nConnection: close\r\n\r\n";
+                        if stream.write_all(response).await.is_err() {
+                            // Ignora o erro, a conexão será fechada de qualquer forma.
+                        }
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Inicia o servidor HTTPS principal com múltiplos workers.
+pub async fn run_https_server(config: Config, shutdown_tx: broadcast::Sender<()>) -> Result<()> {
     let addr_str = format!("[::]:{}", config.port);
     let addr: SocketAddr = addr_str.parse()?;
     let num_workers = config.workers;
-    info!(workers = num_workers, "Iniciando o servidor Space...");
+    info!(workers = num_workers, "Servidor HTTPS principal iniciando...");
     let (certs, key) = load_certs_and_key(&config.cert_path, &config.key_path)?;
     let server_config = ServerConfig::builder().with_no_client_auth().with_single_cert(certs, key)?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
     let connection_id_counter = Arc::new(AtomicUsize::new(0));
     let connections: ConnectionMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
     let mut worker_handles = Vec::with_capacity(num_workers);
+
     for i in 0..num_workers {
         let acceptor_clone = acceptor.clone();
         let connections_clone = Arc::clone(&connections);
         let counter_clone = Arc::clone(&connection_id_counter);
         let listener = create_reusable_port_listener(addr)?;
         let shutdown_rx = shutdown_tx.subscribe();
-        info!(worker_id = i, address = %addr, "Worker ouvindo");
+        info!(worker_id = i, address = %addr, "Worker HTTPS ouvindo");
         let handle = tokio::spawn(async move {
             run_worker(i, listener, acceptor_clone, shutdown_rx, connections_clone, counter_clone).await;
         });
         worker_handles.push(handle);
     }
     for handle in worker_handles {
+        // Apenas um '?' é necessário para propagar um erro de pânico da tarefa.
         handle.await?;
     }
     Ok(())
@@ -83,10 +120,7 @@ async fn run_worker(worker_id: usize, listener: TcpListener, acceptor: TlsAccept
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_rx.recv() => {
-                info!(worker_id, "Worker recebendo sinal de shutdown.");
-                break;
-            }
+            _ = shutdown_rx.recv() => { info!(worker_id, "Worker recebendo sinal de shutdown."); break; }
             result = listener.accept() => {
                 if let Ok((socket, addr)) = result {
                     info!(%addr, worker_id, "Nova conexão TCP recebida");
@@ -108,6 +142,29 @@ async fn run_worker(worker_id: usize, listener: TcpListener, acceptor: TlsAccept
     }
 }
 
+async fn send_to_python_and_get_response(conn_id: u64, addr: SocketAddr, data: Vec<u8>) -> std::io::Result<Vec<u8>> {
+    let message = LowLevelMessage::Data { conn_id, remote_addr: addr.to_string(), data };
+    let serialized_message = bincode::serialize(&message).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    const IPC_SOCKET_PATH: &str = "/tmp/space_server.sock";
+    let mut ipc_stream = UnixStream::connect(IPC_SOCKET_PATH).await?;
+    let msg_len = serialized_message.len() as u64;
+    ipc_stream.write_all(&msg_len.to_le_bytes()).await?;
+    ipc_stream.write_all(&serialized_message).await?;
+    info!(conn_id, bytes_sent = msg_len, "Dados enviados via IPC.");
+    let mut len_buf = [0u8; 8];
+    ipc_stream.read_exact(&mut len_buf).await?;
+    let response_len = u64::from_le_bytes(len_buf);
+    let mut ipc_response_buf = vec![0u8; response_len as usize];
+    ipc_stream.read_exact(&mut ipc_response_buf).await?;
+    info!(conn_id, bytes_received = response_len, "Resposta recebida da camada Python.");
+    if let Ok(response_message) = bincode::deserialize::<HighLevelMessage>(&ipc_response_buf) {
+        if let HighLevelMessage::ResponseData { data, .. } = response_message {
+            return Ok(data);
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Falha ao desserializar resposta IPC"))
+}
+
 #[instrument(skip_all, fields(conn_id, addr))]
 async fn handle_connection(mut tls_stream: TlsStream<TcpStream>, addr: SocketAddr, connections: ConnectionMap, id_counter: Arc<AtomicUsize>) {
     let conn_id = id_counter.fetch_add(1, Ordering::SeqCst) as u64;
@@ -119,23 +176,20 @@ async fn handle_connection(mut tls_stream: TlsStream<TcpStream>, addr: SocketAdd
     counter!("connections_total").increment(1);
     gauge!("connections_active").increment(1.0);
     
-    let mut buffer = [0; 1024];
+    let mut buffer = [0; 2048];
     
     if let Ok(n) = tls_stream.read(&mut buffer).await {
         if n > 0 {
             let request_bytes = &buffer[..n];
-
-            // WAF DE BAIXO NÍVEL EM RUST: Bloqueia Path Traversal
-            if request_bytes.windows(3).any(|w| w == b"../") || request_bytes.windows(3).any(|w| w == b"..\\") {
+            if request_bytes.windows(2).any(|window| window == b"..") {
                 warn!(conn_id, "Ataque de Path Traversal detectado e bloqueado na camada Rust.");
-                let response = b"HTTP/1.1 403 Forbidden\r\n\r\nPath Traversal Attack Blocked.";
-                if tls_stream.write_all(response).await.is_err() { /* ignora erro */ }
-                let _ = tls_stream.flush().await; // Garante o envio
+                let response = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 28\r\n\r\nPath Traversal Blocked";
+                if tls_stream.write_all(response).await.is_ok() {
+                    let _ = tls_stream.flush().await;
+                }
             } else {
-                // Se for seguro, prossegue com a comunicação IPC para o Python.
                 let request_data = request_bytes.to_vec();
                 info!(bytes_read = n, "Requisição segura, enviando para a camada Python...");
-
                 if let Ok(response_from_python) = send_to_python_and_get_response(conn_id, addr, request_data).await {
                    if let Err(e) = tls_stream.write_all(&response_from_python).await {
                         warn!(error = %e, "Erro ao escrever resposta HTTP para o cliente");
@@ -154,33 +208,4 @@ async fn handle_connection(mut tls_stream: TlsStream<TcpStream>, addr: SocketAdd
     connections.lock().unwrap().remove(&(conn_id as usize));
     gauge!("connections_active").decrement(1.0);
     info!("Conexão encerrada");
-}
-
-async fn send_to_python_and_get_response(conn_id: u64, addr: SocketAddr, data: Vec<u8>) -> std::io::Result<Vec<u8>> {
-    let message = LowLevelMessage::Data { conn_id, remote_addr: addr.to_string(), data };
-    let serialized_message = bincode::serialize(&message).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    
-    const IPC_SOCKET_PATH: &str = "/tmp/space_server.sock";
-    let mut ipc_stream = UnixStream::connect(IPC_SOCKET_PATH).await?;
-    
-    let msg_len = serialized_message.len() as u64;
-    ipc_stream.write_all(&msg_len.to_le_bytes()).await?;
-    ipc_stream.write_all(&serialized_message).await?;
-    info!(bytes_sent = msg_len, "Dados enviados via IPC.");
-
-    let mut len_buf = [0u8; 8];
-    ipc_stream.read_exact(&mut len_buf).await?;
-    let response_len = u64::from_le_bytes(len_buf);
-    
-    let mut ipc_response_buf = vec![0u8; response_len as usize];
-    ipc_stream.read_exact(&mut ipc_response_buf).await?;
-    info!(bytes_received = response_len, "Resposta recebida da camada Python.");
-
-    if let Ok(response_message) = bincode::deserialize::<HighLevelMessage>(&ipc_response_buf) {
-        if let HighLevelMessage::ResponseData { data, .. } = response_message {
-            return Ok(data);
-        }
-    }
-
-    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Falha ao desserializar resposta IPC"))
 }
