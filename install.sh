@@ -1,8 +1,9 @@
 #!/bin/bash
-# install.sh (v1.2 - Robusto e com todas as dependências)
+# install.sh (v1.3 - Com 'set -e' e 'set -x' para robustez)
 
-# CORREÇÃO: "set -e" faz com que o script pare imediatamente se algum comando falhar.
-set -e
+# --- Configurações de Segurança e Debug ---
+set -e  # Para o script se qualquer comando falhar
+set -x  # Mostra cada comando que está sendo executado
 
 # ==============================================================================
 # Script de Instalação e Configuração do Servidor Space v1.0.0
@@ -15,6 +16,7 @@ APP_GROUP="spacegroup"
 APP_ROOT="/var/www/space"
 CONFIG_DIR="/etc/space"
 LOG_DIR="/var/log/space"
+WORKS_DIR="/srv/space/works"
 REPO_URL="https://github.com/webstrucs/space.git"
 
 # --- CORREÇÃO: Variável para a branch a ser instalada ---
@@ -23,7 +25,7 @@ GIT_BRANCH="dev"
 
 # --- Etapa 0: Verificação de Segurança ---
 if [ "$(id -u)" -ne 0 ]; then
-   echo "ERRO: Este script precisa ser executado como root ou com sudo." 
+   echo "ERRO: Este script precisa ser executado como root ou com sudo."
    exit 1
 fi
 
@@ -39,7 +41,7 @@ echo "--> [2/7] Configurando usuário e diretórios de produção..."
 if ! getent group "$APP_GROUP" >/dev/null; then groupadd --system "$APP_GROUP"; fi
 if ! id "$APP_USER" >/dev/null 2>&1; then useradd --system --gid "$APP_GROUP" --home-dir "$APP_ROOT" --shell /bin/false "$APP_USER"; fi
 
-# CORREÇÃO: Usando as variáveis corretas e criando a pasta 'works'
+# Cria a estrutura de diretórios padrão do Linux (FHS)
 mkdir -p "$APP_ROOT" "$CONFIG_DIR" "$LOG_DIR" "$WORKS_DIR"
 
 # --- Etapa 3: Deploy e Build da Aplicação ---
@@ -50,6 +52,7 @@ git clone --branch "$GIT_BRANCH" "$REPO_URL" "$APP_ROOT"
 echo "--> [4/7] Instalando Rust e compilando o núcleo..."
 if ! command -v cargo &> /dev/null; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    # O source precisa ser feito no contexto do root, o script já está rodando como tal
     source "$HOME/.cargo/env"
 fi
 cd "$APP_ROOT/rs_core"
@@ -77,12 +80,13 @@ systemctl daemon-reload
 systemctl enable space-python.service
 systemctl enable space-rust.service
 
+# --- Finalização ---
+set +x # Desativa a impressão de comandos
 echo "----------------------------------------------------"
-echo "✅ Instalação da estrutura do Servidor Space (dev) concluída!"
-echo ""
-echo "PRÓXIMOS PASSOS MANUAIS:"
-echo "1. Aponte seu domínio/subdomínio de testes para o IP desta VPS."
-echo "2. Obtenha certificados SSL com 'sudo certbot certonly --standalone ...'"
-echo "3. Crie e preencha o arquivo '/etc/space/production.env'."
+echo "✅ Instalação da estrutura do Servidor Space concluída!"
+echo "PRÓXIMOS PASSOS MANUAIS IMPORTANTES:"
+echo "1. Configure o DNS do seu domínio para apontar para o IP desta VPS."
+echo "2. Obtenha os certificados SSL com 'certbot certonly --standalone ...'"
+echo "3. Crie e preencha o arquivo de ambiente em '/etc/space/production.env'."
 echo "4. Inicie os serviços com: 'sudo systemctl start space-python space-rust'"
 echo "----------------------------------------------------"
