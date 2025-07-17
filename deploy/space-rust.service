@@ -1,0 +1,18 @@
+[Unit]
+Description=Space Server - Rust Core Gateway
+Requires=space-python.service
+After=network.target space-python.service
+
+[Service]
+Type=simple
+User=spaceuser
+Group=spacegroup
+WorkingDirectory=/var/www/space
+EnvironmentFile=/etc/space/production.env
+ExecStart=/var/www/space/space_server_rust
+Restart=on-failure
+RestartSec=5s
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

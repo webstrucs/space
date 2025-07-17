@@ -1,0 +1,15 @@
+[Unit]
+Description=Space Server - Python Application Layer
+After=network.target
+
+[Service]
+Type=simple
+User=spaceuser
+Group=spacegroup
+WorkingDirectory=/var/www/space
+ExecStart=/var/www/space/venv/bin/python3 /var/www/space/main_server.py
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
