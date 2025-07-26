@@ -1,0 +1,29 @@
+name: Automação de Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Executa quando uma tag como v0.1.0 é criada
+
+jobs:
+  build-release:
+    name: Construir e Publicar Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obter código do repositório
+        uses: actions/checkout@v4
+
+      - name: Placeholder para o build
+        run: echo "Iniciando build para a tag ${{ github.ref_name }}..."
+
+      # Futuramente, adicione aqui os passos para:
+      # 1. Compilar o binário Rust em modo de release
+      # 2. Empacotar os arquivos
+      # 3. Criar uma Release no GitHub e anexar os artefatos
+
+      - name: Criar Release no GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          body: "Release ${{ github.ref_name }}. Veja o CHANGELOG.md para detalhes."
+          draft: false
+          prerelease: false

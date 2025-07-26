@@ -1,0 +1,63 @@
+name: CI Principal (Testes Rust & Python)
+
+on:
+  push:
+    branches: [ main, devs ]
+  pull_request:
+    branches: [ main, devs ]
+
+jobs:
+  test-rust:
+    name: Testar Core Rust
+    strategy:
+      matrix:
+        os: [debian-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Obter código do repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar toolchain do Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de dependências do Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Executar testes do Rust
+        run: cargo test --verbose
+
+  test-python:
+    name: Testar API Python
+    needs: test-rust  # Garante que os testes de Rust passem primeiro
+    strategy:
+      matrix:
+        os: [debian-latest, macos-latest, windows-latest]
+        python-version: ['3.11', '3.13'] # Testar em múltiplas versões
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Obter código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Instalar dependências Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test] # Assume que você terá extras de teste em pyproject.toml
+
+      - name: Executar testes Python (pytest)
+        run: pytest
+
+      - name: Gerar relatório de cobertura de código
+        run: |
+          pip install pytest-cov
+          pytest --cov=./ --cov-report=xml
+
+      - name: Enviar relatório para Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true

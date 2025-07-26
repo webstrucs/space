@@ -1,0 +1,30 @@
+name: Benchmarking de Performance
+
+on:
+  workflow_dispatch: # Permite execução manual
+  schedule:
+    - cron: '0 0 * * 0' # Executa todo domingo à meia-noite
+
+jobs:
+  benchmark:
+    name: Executar Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obter código do repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar toolchain do Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de dependências do Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Executar benchmarks
+        run: cargo bench --verbose
+
+      # Opcional: Adicionar um passo para comentar o resultado no commit
+      # - name: Publicar resultado do benchmark
+      #   uses: benchmark-action/github-action-comment@v1
+      #   with:
+      #     summary: |
+      #       Resultado dos benchmarks disponível.
