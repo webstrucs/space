@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "space-server"
+version = "0.1.0"
+authors = [
+  { name="Seu Nome", email="seu.email@example.com" },
+]
+description = "Interface Python para o servidor web de alta performance Space."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/webstrucs/space"
+"Bug Tracker" = "https://github.com/webstrucs/space/issues"

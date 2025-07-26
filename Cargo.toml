@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "crates/*", # Exemplo se você modularizar o core Rust
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Seu Nome <seu.email@example.com>"]
+license = "MIT"
+repository = "https://github.com/webstrucs/space"
+description = "Um servidor web HTTP híbrido de alta performance em Rust e Python."
+
+[workspace.dependencies]
+# Dependências do Core Rust conforme a documentação de arquitetura
+tokio = { version = "1.0", features = ["full"] }
+rayon = "1.7"
+pyo3 = { version = "0.20", features = ["extension-module"] }
+hyper = "0.14"
+rustls = "0.21"
+serde = "1.0"
+tracing = "0.1"
+
+# Adicione outras dependências que possam ser necessárias
+# bytes = "1"
+# http = "0.2"
